@@ -1,8 +1,12 @@
-use log::{ debug, info };
 use std::path::Path;
-use crate::pager::{Pager, constants};
-use crate::btree;
-use bincode::config;
+use crate::{
+    constants::{
+        DBHeader,
+        DB_HEADER_SIZE
+    },
+    pager::Pager,
+    btree
+};
 
 pub struct Config {
 }
@@ -11,44 +15,55 @@ pub struct Connection {
     pager : Pager
 }
 
+///
+/// Public user / application interface 
+///
+/// Put(key, value)
+/// Get(key) -> value
+/// Delete(key)
+///
+///     *Put will update value if key already exists
+///
 impl Connection {
-    fn try_initialize_db(pager : &mut Pager) -> std::io::Result<()> {
-        let mut page_buffer = Pager::allocate_page_buffer();
+    pub fn open(db_path : &Path, config : Config) -> std::io::Result<Connection> {
+        let mut connection = Connection {
+            pager: Pager::new(db_path)?,
+        };
 
-        let bytes_read = pager.get_page(page_buffer.as_mut_slice(), 0)?;
+        connection.try_initialize_db(db_path);
+
+        Ok(connection)
+    }
+
+    // 
+    // Create new database file if necessary 
+    // Add empty root node along with db metadata
+    // on first page.
+    //
+    fn try_initialize_db(&mut self, db_path : &Path) -> std::io::Result<()> {
+        let (first_page, bytes_read) = self.pager.get_page(0)?;
 
         if bytes_read == 0 {
-            // initialize db header / root node
-            let mut root_node = btree::operations::create_leaf_node();
-            // TODO: better way of converting
-            let mut payload = vec![0u8; (constants::PAGE_SIZE-constants::DB_HEADER_SIZE) as usize];
-            bincode::encode_into_slice(root_node.header, payload.as_mut_slice(), config::standard());
+            let mut payload = Pager::allocate_page_buffer();
+            let mut header_slice = &mut payload[..DB_HEADER_SIZE];
+            // TODO: check for error
+            bincode::encode_into_slice(DBHeader::get(), header_slice, bincode::config::standard());
 
-            pager.save_page(&mut payload, Some(0));
+            btree::operations::initialize_tree(&mut payload);
 
-            info!("Initializing database header and root node");
-        } else {
-            info!("Database already initialized");
+            self.pager.save_page(payload, None)?;
         }
 
         Ok(())
     }
 
-    pub fn open(db_path : &Path, config : Config) -> std::io::Result<Connection> {
-        let mut pager = Pager::new(db_path)?;
-
-        Self::try_initialize_db(&mut pager);
-
-        info!("Opened new database connection");
-
-        Ok(Connection {
-            pager,
-        })
+    pub fn put(&mut self, key : Vec<u8>, value : Vec<u8>) -> std::io::Result<()> {
+        btree::operations::insert_record(key, value, &mut self.pager)?;
+        Ok(())
     }
-
-    pub fn insert(&mut self, key : Vec<u8>, value : Vec<u8>) {
-        // tell b-tree to insert and pass in pager??
-        btree::operations::find_node(key, &mut self.pager);
+    pub fn get(&mut self, key : Vec<u8>) -> std::io::Result<Vec<u8>> {
+        btree::operations::get_record(key, &mut self.pager)
     }
+    // pub fn delete(key : Vec<u8>) -> std::io::Result<()> {
+    // }
 }
-
