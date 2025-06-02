@@ -1,6 +1,8 @@
 use log::{ debug, info };
 use std::path::Path;
-use crate::pager::Pager;
+use crate::pager::{Pager, constants};
+use crate::btree;
+use bincode::config;
 
 pub struct Config {
 }
@@ -17,7 +19,12 @@ impl Connection {
 
         if bytes_read == 0 {
             // initialize db header / root node
-            pager.save_page(&Pager::allocate_page_buffer(), Some(0));
+            let mut root_node = btree::operations::create_leaf_node();
+            // TODO: better way of converting
+            let mut payload = vec![0u8; (constants::PAGE_SIZE-constants::DB_HEADER_SIZE) as usize];
+            bincode::encode_into_slice(root_node.header, payload.as_mut_slice(), config::standard());
+
+            pager.save_page(&mut payload, Some(0));
 
             info!("Initializing database header and root node");
         } else {
@@ -39,9 +46,9 @@ impl Connection {
         })
     }
 
-    pub fn insert(key : &[u8], value : &[u8]) {
-
+    pub fn insert(&mut self, key : Vec<u8>, value : Vec<u8>) {
         // tell b-tree to insert and pass in pager??
+        btree::operations::find_node(key, &mut self.pager);
     }
 }
 

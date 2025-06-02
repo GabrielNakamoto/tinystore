@@ -1,23 +1,28 @@
+use bincode::{Decode, Encode};
 // n children
 // n-1 keys
-
-
-enum NodeType {
-    Root(SubTreeRefs),
-    Internal(SubTreeRefs),
+#[derive(Encode, Decode, Debug)]
+pub enum NodeType {
+    Root,
+    Internal,
     Leaf
 }
 
-struct SubTreeRefs {
-    child_ptrs : Vec<usize>,
-    keys : Vec<&[u8]>
+pub struct SubTreeRefs {
+    pub child_ptrs : Vec<usize>,
+    pub keys : Vec<Vec<u8>>
 }
 
-struct Node {
-    node_type : NodeType,
+pub struct Node {
+    pub header: NodeHeader,
+    pub subtrees: Option<SubTreeRefs>
 }
 
-impl Node {
-    fn serialize() {
-    }
+#[derive(Encode, Decode, Debug)]
+pub struct NodeHeader {
+    pub magic_numbers : [u8; 4],
+    pub node_type : NodeType, // serialized to u32
+    pub free_space_start : u32,
+    pub free_space_end : u32,
+    pub stored_items : u32
 }

@@ -27,7 +27,7 @@ impl Pager {
 
         let mut pager = Pager {
             file,
-            page_size: constants::PAGE_SIZE
+            page_size: constants::PAGE_SIZE as usize
         };
 
         Ok(pager)
