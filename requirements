@@ -1,0 +1,19 @@
+Who is the intended end user?
+
+-   ml applications maybe
+    
+    So:
+
+        - fast random access
+        - fast read
+
+
+
+Timeline:
+
+-   Storage Engine (B+Tree)
+
+
+
+
+B-Tree => Pager => OS Interface

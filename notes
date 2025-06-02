@@ -1,0 +1,58 @@
+
+
+
+B-Tree <--> Pager interaction
+
+# What operations should the pager have
+# Who owns what resources (Pager = Page Cache?)
+# How does the user communicate to send the (key, value) tuples?
+
+Access / Organization Methods : Btree, Hash
+
+
+-   Page cache gets given a page number for its operations
+-   This page number is provided by the page organization / access method (ex. B+Tree)
+-   Each page is also a b tree node
+
+
+Maximize M
+
+Node header: 
+
+    1. Node type
+    2. Offset to start and end of empty space
+    5. # of elements stored?
+
+Page Formats:
+    Leaf node: 
+        1. Node header
+        2. Key Reference array:
+            
+            For each record (key, value) store:
+                - the key,
+                - the length of the value,
+                - the record pointer to the value (offset within page)
+    Internal node:
+        1. Node header
+        2. Key / subtree page id pairs
+
+Okay so:
+
+-   Internal nodes will store more child pointers (B+Tree)
+-   Each B-Tree node gets its own page on disk
+-   Each node should then maximize the space it takes up within that page
+    by modifying the 'm' parameter: https://dl.acm.org/doi/pdf/10.1145/356770.356776
+-   Child node pointers are 'page numbers'
+-   Node 'keys' are just the actual data record byte array keys entered by the user,
+    and compared using some comparison function
+-   Record pointers: (page# + offset) tuple
+
+
+-   Connection, pager, b-tree and operations
+-   Store root node along with DB header on first page
+-   Root node starts as leaf node before growing
+
+
+-   Have modules such as initialization, persistence, errors, constants and store the
+    main struct definition in mod, 
+
