@@ -13,6 +13,6 @@ fn main() {
     //     connection.put(keys[i].as_bytes().to_vec(), values[i].as_bytes().to_vec());
     // }
 
-    let returned_value = connection.get(String::from("Josh").into_bytes()).unwrap();
+    let returned_value = connection.get(String::from("Gabriel").into_bytes()).unwrap();
     println!("{}", String::from_utf8(returned_value).unwrap());
 }
