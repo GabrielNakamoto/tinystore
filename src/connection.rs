@@ -49,7 +49,7 @@ impl Connection {
             // TODO: check for error
             bincode::encode_into_slice(DBHeader::get(), header_slice, bincode::config::standard());
 
-            btree::operations::initialize_tree(&mut payload);
+            btree::ops::initialize_tree(&mut payload);
 
             self.pager.save_page(payload, None)?;
         }
@@ -58,11 +58,11 @@ impl Connection {
     }
 
     pub fn put(&mut self, key : Vec<u8>, value : Vec<u8>) -> std::io::Result<()> {
-        btree::operations::insert_record(key, value, &mut self.pager)?;
+        btree::ops::insert_record(key, value, &mut self.pager)?;
         Ok(())
     }
     pub fn get(&mut self, key : Vec<u8>) -> std::io::Result<Vec<u8>> {
-        btree::operations::get_record(key, &mut self.pager)
+        btree::ops::get_record(key, &mut self.pager)
     }
     // pub fn delete(key : Vec<u8>) -> std::io::Result<()> {
     // }
