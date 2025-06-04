@@ -144,6 +144,30 @@ impl Node {
         // Ok((record_key, record_value))
     }
 
+    pub fn encode_data_entry(entry_slice : &mut [u8], entry : &DataEntry) {
+        match entry {
+            DataEntry::Leaf(key, value) => {
+                bincode::encode_into_slice(
+                    key.len() as u32, &mut entry_slice[..4], bincode::config::standard());
+                bincode::encode_into_slice(
+                    value.len() as u32, &mut entry_slice[4..8], bincode::config::standard());
+
+                let value_start = 8 + key.len();
+
+                &mut entry_slice[8..value_start].copy_from_slice(&key[..]);
+                &mut entry_slice[value_start..value_start+value.len()].copy_from_slice(&value[..]);
+            },
+            DataEntry::Internal(key, page_id) => {
+                bincode::encode_into_slice(
+                    key.len() as u32, &mut entry_slice[..4], bincode::config::standard());
+                bincode::encode_into_slice(
+                    page_id, &mut entry_slice[4..8], bincode::config::standard());
+
+                &mut entry_slice[8..8+key.len()].copy_from_slice(&key[..]);
+            }
+        }
+    }
+
     // 
     // Insert keys in increasing order (maybe just sort the offset ptrs)
     // When there is no more room for a new key, move it to a new 
@@ -158,7 +182,7 @@ impl Node {
 
         // assume rptrs are sorted in order of increasing keys
         // let rptrs = self.get_offsets_array()?;
-        let to_move = (self.offsets_array.len() + 1) / 2;
+        let to_move = ((self.header.items_stored + 1) / 2) as usize;
 
         // Create right node and move pointers and records
         // +1 cause the first value gets moved up??
@@ -171,8 +195,21 @@ impl Node {
             //     NODE_HEADER_SIZE as u32 + (4*to_move),
             //     PAGE_SIZE-
     
-            for i in self.offsets_array.len()-(to_move as usize)..self.offsets_array.len() {
-                let record = self.decode_data_entry(i);
+            let mut free_space_end = PAGE_SIZE;
+            for i in (self.header.items_stored as usize)-to_move..self.header.items_stored as usize { 
+                // free_space_end -= 8 + 
+                let record = self.decode_data_entry(i)?;
+                let new_free_space_end = free_space_end - match &record {
+                    DataEntry::Leaf(key, value) => {
+                        8 + key.len() + value.len()
+                    },
+                    DataEntry::Internal(key, page_id) => {
+                        8 + key.len()
+                    }
+                };
+
+                Node::encode_data_entry(&mut right_page_buffer[new_free_space_end..free_space_end], &record);
+                free_space_end = new_free_space_end;
             }
         }
 

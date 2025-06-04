@@ -128,22 +128,14 @@ pub fn insert_record(mut key : Vec<u8>, mut value : Vec<u8>, pager : &mut Pager)
     let mut record_slice =
         &mut node.page_buffer[record_offset as usize..node.header.free_space_end as usize];
 
-    bincode::encode_into_slice(
-        key.len() as u32, &mut record_slice[..4],
-        bincode::config::standard());
-    bincode::encode_into_slice(
-        value.len() as u32, &mut record_slice[4..8],
-        bincode::config::standard());
-
-    &mut record_slice[8..8 as usize+key.len()]
-        .copy_from_slice(key.as_mut_slice());
-    &mut record_slice[8+key.len() as usize..]
-        .copy_from_slice(value.as_mut_slice());
-
     // Update node header
     node.header.free_space_start += 4;
     node.header.free_space_end -= (key.len() + value.len() + 8) as u32;
     node.header.items_stored += 1;
+
+    let data_entry = DataEntry::Leaf(key, value);
+    Node::encode_data_entry(&mut record_slice, &data_entry);
+
 
     let mut header_slice = &mut node.page_buffer[header_start..header_start+NODE_HEADER_SIZE as usize];
 
