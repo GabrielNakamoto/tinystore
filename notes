@@ -1,3 +1,14 @@
+TODO: implement free block and node iterators?, start w free blocks
+
+Managing empty cells:
+
+-   Each 'free block' of unused data space in a node
+    contains a 4 byte header consisting of 2 bytes for
+    the pointer to the next free block and 2 bytes
+    for the total size of the free block
+
+-   The node header then includes the offset to the first free block
+
 
 
 Key cell vs Key value cell

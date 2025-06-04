@@ -213,6 +213,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "prev-iter"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d1b0aee15078d8a0671812084cb95f78d84b24424476bb3a113406c818d5a79"
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.95"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -332,6 +338,7 @@ dependencies = [
  "bincode",
  "env_logger",
  "log",
+ "prev-iter",
  "rand",
 ]
 
