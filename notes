@@ -1,5 +1,35 @@
 
+
+Key cell vs Key value cell
+
+
+Key cell = [ key_size | page_id | key_bytes ]
+Key/value cell = [ key_size | value_size | key_bytes | value_bytes ]
+
 Use assert_eq??
+
+
+
+What kind of methods do I want to be part of the
+node struct vs btree operations??
+
+
+Remember: Abstraction, the node doesn't know about the tree?
+
+Btree ops (Node level):
+
+-   Searching
+-   Splitting
+-   Merging?
+-   Insertion / deletion (delegates node specifics)
+
+
+Node ops (Pager level: records, headers):
+
+-   Decoding, Inserting, Deleting records
+-   Decoding, editing headers
+-   Managing pointers within node
+
 
 
 B-Tree <--> Pager interaction
