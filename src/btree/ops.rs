@@ -97,6 +97,8 @@ pub fn insert_record(mut key : Vec<u8>, mut value : Vec<u8>, pager : &mut Pager)
 
     // Overflowed
     if node.header.free_space_end - node.header.free_space_start < (key.len() + value.len()) as u32 {
+        // println!("Overflowed");
+        // return Err(IOError::new(ErrorKind::Other, "oh no"));
         split_node(&mut node, pager);
         // let new_node = node.split(pager)?;
     }
@@ -128,7 +130,7 @@ pub fn insert_record(mut key : Vec<u8>, mut value : Vec<u8>, pager : &mut Pager)
 
     // Request changes to page cache
     // TODO: Look at buffered writes
-    pager.save_page(node.page_buffer.to_vec(), Some(node.page_id));
+    pager.save_page(&node.page_buffer.to_vec(), Some(node.page_id));
     Ok(())
 }
 
@@ -187,7 +189,11 @@ pub fn split_node(node : &mut Node, pager : &mut Pager) -> std::io::Result<()> {
             &node.offsets_array[(node.header.items_stored as usize)-to_move..],
             &mut right_page_buffer[NODE_HEADER_SIZE..NODE_HEADER_SIZE+(4*to_move)],
             bincode::config::standard());
+
     }
+
+    pager.save_page(&node.page_buffer, Some(node.page_id));
+    let right_id = pager.save_page(&right_page_buffer.to_vec(), None)? as u32;
 
     // Create upper node and move the split pointer
     {
@@ -198,8 +204,7 @@ pub fn split_node(node : &mut Node, pager : &mut Pager) -> std::io::Result<()> {
             NODE_HEADER_SIZE as u32+4,
             (PAGE_SIZE as u32) - entry_size,
             1);
-        // TODO: how do I know page id?, I have to save the right node first
-        // top_node_header.rightmost_child = 
+        top_node_header.rightmost_child = right_id;
 
         bincode::encode_into_slice(
             &top_node_header,
@@ -218,8 +223,7 @@ pub fn split_node(node : &mut Node, pager : &mut Pager) -> std::io::Result<()> {
         // Node::encode_data_entry(&mut top_page_buffer[offset..], &split_entry);
     }
 
-    pager.save_page(top_page_buffer.to_vec(), None);
-    pager.save_page(right_page_buffer.to_vec(), None);
+    pager.save_page(&top_page_buffer.to_vec(), None);
 
     Ok(())
 }

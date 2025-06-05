@@ -51,7 +51,7 @@ impl Connection {
 
             btree::ops::initialize_tree(&mut payload);
 
-            self.pager.save_page(payload, None)?;
+            self.pager.save_page(&payload, None)?;
         }
 
         Ok(())

@@ -40,18 +40,26 @@ impl Pager {
         Ok((page_buffer, bytes_read))
     }
 
-    pub fn save_page(&mut self, mut page_buffer : Vec<u8>, page_id : Option<u32>) -> std::io::Result<usize> {
+    pub fn save_page(&mut self, page_buffer : &Vec<u8>, page_id : Option<u32>) -> std::io::Result<usize> {
         match page_id {
             None => { // create new page
-                return self.file_handle.write(page_buffer.as_mut_slice());
+                let pos = self.file_handle.seek(SeekFrom::End(0))? as usize;
+                assert_eq!(pos % PAGE_SIZE, 0);
+
+                let new_page_id : usize = pos / PAGE_SIZE;
+
+                self.file_handle.write(&page_buffer[..]);
+                self.file_handle.rewind();
+
+                Ok(new_page_id)
             },
             Some(id) => { // update page
                 self.file_handle.seek(SeekFrom::Start((id * PAGE_SIZE as u32) as u64));
-                self.file_handle.write(page_buffer.as_mut_slice());
+                self.file_handle.write(&page_buffer[..]);
                 self.file_handle.rewind();
-            },
-        };
 
-        Ok(0)
+                Ok(id as usize)
+            },
+        }
     }
 }

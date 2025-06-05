@@ -1,4 +1,5 @@
 use prev_iter::PrevPeekable;
+use log::{info, warn};
 use super::entry::DataEntry;
 use crate::{
     constants::{
@@ -52,7 +53,7 @@ pub struct Node {
     pub offsets_array : Vec<u32>
 }
 
-#[derive(Decode, Encode, Clone, Copy)]
+#[derive(Decode, Encode, Clone, Copy, Debug)]
 pub struct FreeBlock {
     pub next_ptr: u16,
     pub total_size: u16
@@ -60,14 +61,28 @@ pub struct FreeBlock {
 
 pub struct FreeBlockIter<'a> {
     pub parent: &'a Node,
-    pub curr: FreeBlock
+    pub curr: Option<FreeBlock>
 }
 
 impl<'a> Iterator for FreeBlockIter<'a> {
     type Item = FreeBlock;
 
     fn next(&mut self) -> Option<Self::Item> {
-        None
+        if let Some(block) = self.curr {
+            if block.next_ptr == 0 {
+                self.curr = None;
+                return Some(block);
+            }
+
+            let start = block.next_ptr as usize;
+            self.curr = bincode::decode_from_slice(
+                &self.parent.page_buffer[start..start+4],
+                bincode::config::standard()).ok()?.0;
+
+            Some(block)
+        } else {
+            None
+        }
     }
 }
 
@@ -77,7 +92,7 @@ impl<'a> FreeBlockIter<'a> {
 
         Some(Self {
             parent,
-            curr: block
+            curr: Some(block)
         })
     }
 }
@@ -85,6 +100,7 @@ impl<'a> FreeBlockIter<'a> {
 impl Node {
     pub fn first_free_block(&self) -> Option<FreeBlock> {
         if self.header.first_free_block_offset == 0 {
+            info!("No free blocks");
             None
         } else {
             let start = self.header.first_free_block_offset as usize;
@@ -92,6 +108,8 @@ impl Node {
 
             let block : FreeBlock = bincode::decode_from_slice(
                 &self.page_buffer[start..end], bincode::config::standard()).ok().map(|(block, _)| block)?;
+
+            info!("Root free block at: {}", start);
 
             Some(block)
         }
@@ -173,36 +191,36 @@ impl Node {
         let next_ptr = match iter {
             Some(mut iter) => {
                 // TODO: handle option => results
-                let mut prev_iter = PrevPeekable::new(iter);
-                let mut block_before = prev_iter.find(|block| block.next_ptr > entry_offset as u16).unwrap();
+                // let mut prev_iter = PrevPeekable::new(iter);
+                let mut prev_vec : Vec<_> = iter.collect();
+                info!("Free block list: {:#?}", prev_vec);
 
-                let ptr = block_before.next_ptr;
-                block_before.next_ptr = entry_offset as u16;
+                let mut update_block = prev_vec
+                    .iter()
+                    .find(|block| block.next_ptr > entry_offset as u16)
+                    .or_else(|| prev_vec.last())
+                    .unwrap().clone();
 
-                let before_ptr = match prev_iter.prev_peek() {
-                    Some(block) => block.next_ptr,
+                let left_ptr = match prev_vec.iter().rev().nth(1) {
+                    Some(prev) => prev.next_ptr,
                     None => self.header.first_free_block_offset
                 } as usize;
 
+                let right_ptr = update_block.next_ptr as usize;
+                update_block.next_ptr = entry_offset as u16;
+
                 // Update previous node in linked list to contain ptr to new block
                 bincode::encode_into_slice(
-                    &block_before,
-                    &mut self.page_buffer[before_ptr..before_ptr+4],
+                    &update_block,
+                    &mut self.page_buffer[left_ptr..left_ptr+4],
                     bincode::config::standard());
 
                 // Return ptr to next block
-                ptr
+                right_ptr
             },
             None => {
                 // Add to page header
                 self.header.first_free_block_offset = entry_offset as u16;
-
-                // Encode change
-                // let header_start = if self.page_id == 0 { DB_HEADER_SIZE } else { 0 } as usize;
-                // bincode::encode_into_slice(
-                //     &self.header,
-                //     &mut self.page_buffer[header_start..header_start+NODE_HEADER_SIZE],
-                //     bincode::config::standard());
                 self.encode_header();
 
                 0
@@ -212,7 +230,7 @@ impl Node {
         // Create free block
         let entry = self.decode_data_entry(entry_id)?;
         let block = FreeBlock {
-            next_ptr,
+            next_ptr: next_ptr as u16,
             total_size: entry.size() as u16
             // total_size: self.decode_data_entry(entry_id)?.size() as u16
         };
