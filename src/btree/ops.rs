@@ -152,11 +152,7 @@ pub fn split_node(node : &mut Node, pager : &mut Pager) -> std::io::Result<()> {
     // Create right node and move pointers and records
     // +1 cause the first value gets moved up??
 
-<<<<<<< HEAD
     let split_entry = node.decode_data_entry((node.header.items_stored as usize) - to_move)?;
-=======
-    let split_entry = node.decode_data_entry((node.header.items_stored as usize) - to_move);
->>>>>>> 386de0a (Refactoring)
 
     {
         // TODO: Handle new offsets
