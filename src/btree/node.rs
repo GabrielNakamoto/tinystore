@@ -75,9 +75,13 @@ impl<'a> Iterator for FreeBlockIter<'a> {
             }
 
             let start = block.next_ptr as usize;
-            self.curr = bincode::decode_from_slice(
+            let decoded = bincode::decode_from_slice(
                 &self.parent.page_buffer[start..start+4],
                 bincode::config::standard()).ok()?.0;
+
+            // info!("Next free block: {:#?}", decoded);
+
+            self.curr = Some(decoded);
 
             Some(block)
         } else {
@@ -193,21 +197,24 @@ impl Node {
                 // TODO: handle option => results
                 // let mut prev_iter = PrevPeekable::new(iter);
                 let mut prev_vec : Vec<_> = iter.collect();
-                info!("Free block list: {:#?}", prev_vec);
 
-                let mut update_block = prev_vec
-                    .iter()
-                    .find(|block| block.next_ptr > entry_offset as u16)
-                    .or_else(|| prev_vec.last())
-                    .unwrap().clone();
+                let update_block_index = prev_vec.iter()
+                    .position(|block| {
+                        block.next_ptr > entry_offset as u16
+                    }).unwrap_or(prev_vec.len() - 1);
 
-                let left_ptr = match prev_vec.iter().rev().nth(1) {
-                    Some(prev) => prev.next_ptr,
-                    None => self.header.first_free_block_offset
+                let mut update_block = prev_vec[update_block_index].clone();
+
+                let left_ptr = if update_block_index > 0 {
+                    prev_vec[update_block_index-1].next_ptr
+                } else {
+                    self.header.first_free_block_offset
                 } as usize;
 
+                let info = update_block;
                 let right_ptr = update_block.next_ptr as usize;
                 update_block.next_ptr = entry_offset as u16;
+                info!("Updated left free block:\n{:?} => {:?}", info, update_block);
 
                 // Update previous node in linked list to contain ptr to new block
                 bincode::encode_into_slice(
@@ -235,6 +242,7 @@ impl Node {
             // total_size: self.decode_data_entry(entry_id)?.size() as u16
         };
     
+        info!("New free block: {:#?}", block);
         // Encode new block
         bincode::encode_into_slice(
             &block,
