@@ -1,3 +1,28 @@
+What kind of operations should be easy?:
+
+Node => header + offsets array + data entries + free block linked list
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 TODO: implement free block and node iterators?, start w free blocks
 
 Managing empty cells:
@@ -33,6 +58,7 @@ Btree ops (Node level):
 -   Splitting
 -   Merging?
 -   Insertion / deletion (delegates node specifics)
+
 
 
 Node ops (Pager level: records, headers):

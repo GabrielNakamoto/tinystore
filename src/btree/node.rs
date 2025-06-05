@@ -1,4 +1,5 @@
 use prev_iter::PrevPeekable;
+use super::entry::DataEntry;
 use crate::{
     constants::{
         DB_HEADER_SIZE,
@@ -8,7 +9,7 @@ use crate::{
 };
 use bincode::{Decode, Encode};
 
-pub const NODE_HEADER_SIZE : usize = 20;
+pub const NODE_HEADER_SIZE : usize = 26;
 pub const M : usize = 5;
 
 
@@ -26,7 +27,8 @@ pub struct NodeHeader {
     pub free_space_start : u32,
     pub free_space_end : u32,
     pub items_stored : u32,
-    pub first_free_block_offset : u16
+    pub first_free_block_offset : u16,
+    pub rightmost_child: u32
 }
 
 impl NodeHeader {
@@ -37,7 +39,8 @@ impl NodeHeader {
             free_space_start,
             free_space_end,
             items_stored,
-            first_free_block_offset: 0
+            first_free_block_offset: 0,
+            rightmost_child: 0
         }
     }
 }
@@ -79,11 +82,6 @@ impl<'a> FreeBlockIter<'a> {
     }
 }
 
-pub enum DataEntry {
-    Internal(Vec<u8>, u32), // Key, Child ptr (page_id)
-    Leaf(Vec<u8>, Vec<u8>), // Key, Value
-}
-
 impl Node {
     pub fn first_free_block(&self) -> Option<FreeBlock> {
         if self.header.first_free_block_offset == 0 {
@@ -111,6 +109,16 @@ impl Node {
             header,
             offsets_array
         })
+    }
+
+    // TODO: error handling
+    pub fn encode_header(&mut self)  {
+        let header_start = if self.page_id == 0 { DB_HEADER_SIZE } else { 0 } as usize;
+
+        bincode::encode_into_slice(
+            &self.header,
+            &mut self.page_buffer[header_start..header_start+NODE_HEADER_SIZE],
+            bincode::config::standard());
     }
 
     fn get_header(page_id : u32, page_buffer : &Vec<u8>) -> std::io::Result<NodeHeader> {
@@ -148,71 +156,12 @@ impl Node {
     }
 
     pub fn decode_data_entry(&self, entry_id : usize) -> std::io::Result<DataEntry> {
-        // TODO: handle out of range error
-        let entry_offset = self.offsets_array[entry_id] as usize;
-        let key_len : u32 = bincode::decode_from_slice(
-            &self.page_buffer[entry_offset..entry_offset+4],
-            bincode::config::standard()).unwrap().0;
+        let entry_offset = self.offsets_array.get(entry_id).copied().unwrap() as usize;
 
-        match self.header.node_type {
-            NodeType::Internal => {
-                let page_id : u32 = bincode::decode_from_slice(
-                    &self.page_buffer[entry_offset+4..entry_offset+8],
-                    bincode::config::standard()).unwrap().0;
-                let record_key = &self.page_buffer[entry_offset+8..entry_offset+8+(key_len as usize)];
-
-                Ok(DataEntry::Internal(record_key.to_vec(), page_id))
-            },
-            NodeType::Leaf => {
-                let value_len : u32 = bincode::decode_from_slice(
-                    &self.page_buffer[entry_offset+4..entry_offset+8],
-                    bincode::config::standard()).unwrap().0;
-
-                let value_start = entry_offset+8+(key_len as usize);
-                let record_key = &self.page_buffer[entry_offset+8..value_start];
-                let record_value = &self.page_buffer[value_start..value_start+(value_len as usize)];
-
-                // TODO: Make these slices not vecs?
-                Ok(DataEntry::Leaf(record_key.to_vec(), record_value.to_vec()))
-            }
-        }
-        // Ok((record_key, record_value))
+        DataEntry::decode(&self.page_buffer, entry_offset, &self.header.node_type)
     }
 
-    fn get_entry_size(entry : &DataEntry) -> usize {
-        match entry {
-            DataEntry::Leaf(key, value) => {
-                8 + key.len() + value.len()
-            },
-            DataEntry::Internal(key, page_id) => {
-                8 + key.len()
-            }
-        }
-    }
-
-    pub fn encode_data_entry(entry_slice : &mut [u8], entry : &DataEntry) {
-        match entry {
-            DataEntry::Leaf(key, value) => {
-                bincode::encode_into_slice(
-                    key.len() as u32, &mut entry_slice[..4], bincode::config::standard());
-                bincode::encode_into_slice(
-                    value.len() as u32, &mut entry_slice[4..8], bincode::config::standard());
-
-                let value_start = 8 + key.len();
-
-                &mut entry_slice[8..value_start].copy_from_slice(&key[..]);
-                &mut entry_slice[value_start..value_start+value.len()].copy_from_slice(&value[..]);
-            },
-            DataEntry::Internal(key, page_id) => {
-                bincode::encode_into_slice(
-                    key.len() as u32, &mut entry_slice[..4], bincode::config::standard());
-                bincode::encode_into_slice(
-                    page_id, &mut entry_slice[4..8], bincode::config::standard());
-
-                &mut entry_slice[8..8+key.len()].copy_from_slice(&key[..]);
-            }
-        }
-    }
+    // TODO: function to insert new entry, finds best empty spot for it and encodes it
 
     // Optimize this, to batch together removals / updating offsets array
     pub fn remove_data_entry(&mut self, entry_id : usize) -> std::io::Result<()> {
@@ -231,12 +180,8 @@ impl Node {
                 block_before.next_ptr = entry_offset as u16;
 
                 let before_ptr = match prev_iter.prev_peek() {
-                    Some(block) => {
-                        block.next_ptr
-                    },
-                    None => {
-                        self.header.first_free_block_offset
-                    }
+                    Some(block) => block.next_ptr,
+                    None => self.header.first_free_block_offset
                 } as usize;
 
                 // Update previous node in linked list to contain ptr to new block
@@ -253,20 +198,23 @@ impl Node {
                 self.header.first_free_block_offset = entry_offset as u16;
 
                 // Encode change
-                let header_start = if self.page_id == 0 { DB_HEADER_SIZE } else { 0 } as usize;
-                bincode::encode_into_slice(
-                    &self.header,
-                    &mut self.page_buffer[header_start..header_start+NODE_HEADER_SIZE],
-                    bincode::config::standard());
+                // let header_start = if self.page_id == 0 { DB_HEADER_SIZE } else { 0 } as usize;
+                // bincode::encode_into_slice(
+                //     &self.header,
+                //     &mut self.page_buffer[header_start..header_start+NODE_HEADER_SIZE],
+                //     bincode::config::standard());
+                self.encode_header();
 
                 0
             }
         };
 
         // Create free block
+        let entry = self.decode_data_entry(entry_id)?;
         let block = FreeBlock {
             next_ptr,
-            total_size: Self::get_entry_size(&self.decode_data_entry(entry_id)?) as u16
+            total_size: entry.size() as u16
+            // total_size: self.decode_data_entry(entry_id)?.size() as u16
         };
     
         // Encode new block
@@ -287,92 +235,4 @@ impl Node {
         // Save changes?
         Ok(())
     }
-
-    // 
-    // Insert keys in increasing order (maybe just sort the offset ptrs)
-    // When there is no more room for a new key, move it to a new 
-    // node to the right and move the current greatest key from source
-    // node up to make a new one
-    //
-    pub fn split(&mut self, pager : &mut Pager) -> std::io::Result<Node> {
-        // let src_header = self.get_header();
-        // move the second half of the values to the new node
-        let mut top_page_buffer = Pager::allocate_page_buffer();
-        let mut right_page_buffer = Pager::allocate_page_buffer();
-
-        // assume rptrs are sorted in order of increasing keys
-        // let rptrs = self.get_offsets_array()?;
-        let to_move = (((self.header.items_stored + 1) / 2) - 1) as usize;
-
-        // Create right node and move pointers and records
-        // +1 cause the first value gets moved up??
-
-        let split_entry = self.decode_data_entry((self.header.items_stored as usize) - to_move - 1)?;
-
-        {
-            // TODO: Handle new offsets
-
-            let free_space_start = NODE_HEADER_SIZE + (4*to_move);
-    
-            // Data entries, removes each entry from source node at same time
-            let mut free_space_end = PAGE_SIZE;
-            for i in (self.header.items_stored as usize)-to_move..self.header.items_stored as usize { 
-                // free_space_end -= 8 + 
-                let record = self.decode_data_entry(i)?;
-                let new_free_space_end = free_space_end - Self::get_entry_size(&record);
-
-                Node::encode_data_entry(&mut right_page_buffer[new_free_space_end..free_space_end], &record);
-                free_space_end = new_free_space_end;
-
-                self.remove_data_entry(i)?;
-            }
-
-            // Header
-            let right_node_header = NodeHeader::get(
-                self.header.node_type.clone(),
-                (NODE_HEADER_SIZE + 4*to_move) as u32,
-                free_space_end as u32,
-                to_move as u32);
-
-            bincode::encode_into_slice(
-                &right_node_header,
-                &mut right_page_buffer[..NODE_HEADER_SIZE],
-                bincode::config::standard());
-
-            // Offset array
-            bincode::encode_into_slice(
-                &self.offsets_array[(self.header.items_stored as usize)-to_move..],
-                &mut right_page_buffer[NODE_HEADER_SIZE..NODE_HEADER_SIZE+(4*to_move)],
-                bincode::config::standard());
-        }
-
-        // Create upper node and move the split pointer
-        {
-            let entry_size = Self::get_entry_size(&split_entry);
-            // Header
-            let top_node_header = NodeHeader::get(
-                NodeType::Internal, // has to be internal cause moving up
-                NODE_HEADER_SIZE as u32+4,
-                (PAGE_SIZE - entry_size) as u32,
-                1);
-
-            bincode::encode_into_slice(
-                &top_node_header,
-                &mut top_page_buffer[..NODE_HEADER_SIZE],
-                bincode::config::standard());
-
-            // Offset array
-            // bincode::encode
-
-            // Split entry
-            let offset = top_node_header.free_space_end as usize;
-            Node::encode_data_entry(&mut top_page_buffer[offset..], &split_entry);
-        }
-
-        pager.save_page(top_page_buffer.to_vec(), None);
-        pager.save_page(right_page_buffer.to_vec(), None);
-
-        Ok(Node::deserialize(0, pager)?)
-    }
 }
-
