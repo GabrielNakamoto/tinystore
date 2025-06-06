@@ -190,7 +190,7 @@ pub fn split_node(node : &mut Node, pager : &mut Pager) -> std::io::Result<()> {
     node.encode_header();
     pager.save_page(&node.page_buffer, Some(node.page_id));
 
-    assert_eq!(node.offsets_array.len(), previous_stored as usize - to_move);
+    assert_eq!(node.offsets_array.len(), 
 
     Ok(())
 }

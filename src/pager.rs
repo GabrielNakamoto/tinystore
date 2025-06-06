@@ -30,6 +30,12 @@ impl Pager {
         vec![0u8; PAGE_SIZE as usize]
     }
 
+    pub fn next_page_id(&mut self) -> u32 {
+        let pos = self.file_handle.seek(SeekFrom::End(0)).unwrap() as u32;
+        
+        pos / PAGE_SIZE as u32
+    }
+
     pub fn get_page(&mut self, page_id : u32) -> std::io::Result<(Vec<u8>, usize)> {
         let mut page_buffer = Self::allocate_page_buffer();
         self.file_handle.seek(SeekFrom::Start((page_id * PAGE_SIZE as u32) as u64));

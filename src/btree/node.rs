@@ -34,6 +34,19 @@ pub struct NodeHeader {
 }
 
 impl NodeHeader {
+    pub fn new(node_type: NodeType) -> Self {
+        Self {
+            magic_numbers: [80, 65, 71, 69],
+            node_type,
+            free_space_start: NODE_HEADER_SIZE as u32,
+            free_space_end: PAGE_SIZE as u32,
+            items_stored: 0,
+            first_free_block_offset: 0,
+            rightmost_child: 0,
+            parent: -1
+        }
+    }
+
     pub fn get(node_type : NodeType, free_space_start : u32, free_space_end : u32, items_stored : u32) -> Self {
         Self {
             magic_numbers: [80, 65, 71, 69],
@@ -81,8 +94,6 @@ impl<'a> Iterator for FreeBlockIter<'a> {
                 &self.parent.page_buffer[start..start+4],
                 bincode::config::standard()).ok()?.0;
 
-            // info!("Next free block: {:#?}", decoded);
-
             self.curr = Some(decoded);
 
             Some(block)
@@ -116,8 +127,16 @@ impl Node {
                 &self.page_buffer[start..end], bincode::config::standard()).ok().map(|(block, _)| block)?;
 
             debug!("Root free block at: {}", start);
-
             Some(block)
+        }
+    }
+
+    pub fn new(node_type : NodeType, pager : &mut Pager) -> Self {
+        Self {
+            page_id: pager.next_page_id(),
+            page_buffer: Pager::allocate_page_buffer(),
+            header: NodeHeader::new(node_type),
+            offsets_array: Vec::new()
         }
     }
 
@@ -159,11 +178,8 @@ impl Node {
     }
 
     fn get_offsets_array(header : &NodeHeader, page_id : u32, page_buffer : &Vec<u8>) -> std::io::Result<Vec<u32>> {
-        // let node_header = self.get_header()?;
-
         let header_start = if page_id == 0 { DB_HEADER_SIZE } else { 0 } as usize;
         let array_start = header_start + NODE_HEADER_SIZE;
-
         let array_slice = &page_buffer[array_start..header.free_space_start as usize];
 
         let mut offsets_array : Vec<u32> = Vec::with_capacity(header.items_stored as usize);
@@ -209,8 +225,8 @@ impl Node {
             &mut self.page_buffer[start..start+4]
         } else {
             debug!("Adding offset into middle of array");
-            // Shift everything to right over
 
+            // Shift everything to right over
             let to_shift = self.header.items_stored - right_index;
             let end = self.header.free_space_start as usize;
             let start = end - (4*to_shift as usize);
@@ -267,6 +283,7 @@ impl Node {
         self.header.free_space_end -= new_entry.size() as u32;
         self.encode_header();
         
+        self.offsets_array = Self::get_offsets_array(&self.header, self.page_id, &self.page_buffer).unwrap();
         // Double check changes worked?
 
         // let offsets = Self::get_offsets_array(&self.header, self.page_id, &self.page_buffer).unwrap();
@@ -329,10 +346,10 @@ impl Node {
         let block = FreeBlock {
             next_ptr: next_ptr as u16,
             total_size: entry.size() as u16
-            // total_size: self.decode_data_entry(entry_id)?.size() as u16
         };
     
         debug!("New free block: {:#?}", block);
+
         // Encode new block
         bincode::encode_into_slice(
             &block,
@@ -347,8 +364,8 @@ impl Node {
         &mut self.page_buffer.copy_within(shift_start..self.header.free_space_start as usize, shift_start-1);
 
         self.header.free_space_start -= 4;
-
-        // Save changes?
+        self.encode_header();
+        self.offsets_array = Self::get_offsets_array(&self.header, self.page_id, &self.page_buffer).unwrap();
         Ok(())
     }
 }
