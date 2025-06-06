@@ -37,6 +37,5 @@ fn main() {
     for (key, value) in &entries {
         let returned_value = connection.get(key.clone().into_bytes()).unwrap();
         assert_eq!(value.clone().into_bytes(), returned_value);
-        // println!("{}, {}", value, String::from_utf8(returned_value).unwrap());
     }
 }

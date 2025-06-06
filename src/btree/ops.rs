@@ -67,7 +67,7 @@ pub fn search(key : &Vec<u8>, pager : &mut Pager) -> std::io::Result<Node> {
     let mut cur_page_id = root_page_id;
 
     while true {
-        info!("Searching node at page id: {}", cur_page_id);
+        debug!("Searching node at page id: {}", cur_page_id);
         let node = Node::deserialize(cur_page_id, pager)?;
 
         match node.header.node_type {
@@ -99,45 +99,19 @@ pub fn search(key : &Vec<u8>, pager : &mut Pager) -> std::io::Result<Node> {
 }
 
 pub fn insert_record(mut key : Vec<u8>, mut value : Vec<u8>, pager : &mut Pager) -> std::io::Result<()> {
-    // TODO: When inserting a new record pointer put the ptr in order of key comparisons?
-
     // TODO: handle bincode results
+
     let mut node = search(&key, pager)?;
-    // let mut node_header = node.get_header()?;
+    // This is wrong way to check for overflow
 
     // Overflowed
     if node.header.free_space_end - node.header.free_space_start < (key.len() + value.len()) as u32 {
         info!("Node at id: {} overflowed", node.page_id);
         split_node(&mut node, pager);
-        // let new_node = node.split(pager)?;
     }
 
     let data_entry = DataEntry::Leaf(key, value);
     node.insert_data_entry(&data_entry);
-    // let record_offset = node.header.free_space_end-((key.len() + value.len() + 8) as u32);
-    // let key_size = key.len() as u32;
-    // let value_size = value.len() as u32;
-
-    // Update Metadata Section
-    // let meta_end_offset = node.header.free_space_start as usize;
-    // let meta_entry_slice = &mut node.page_buffer[meta_end_offset..meta_end_offset+4];
-    // bincode::encode_into_slice(record_offset, meta_entry_slice, bincode::config::standard());
-
-    // TODO: Store key value sizes in record section? Only store offsets at start
-
-    // let record_end = node.header.free_space_end as usize;
-
-    // Update node header
-    // node.header.free_space_start += 4;
-    // node.header.free_space_end -= (key.len() + value.len() + 8) as u32;
-    // node.header.items_stored += 1;
-    // node.encode_header();
-
-    // Update Record Section
-    // let mut record_slice =
-    //     &mut node.page_buffer[record_offset as usize..record_end];
-    // let data_entry = DataEntry::Leaf(key, value);
-    // data_entry.encode(&mut record_slice);
 
     // Request changes to page cache
     // TODO: Look at buffered writes

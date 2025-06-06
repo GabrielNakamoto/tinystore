@@ -199,18 +199,22 @@ impl Node {
             }
         }
 
+        debug!("Offset right index: {}", right_index);
+        debug!("New entry offset: {}", entry_offset);
         let mut entry_slice = if right_index == self.header.items_stored + 1 {
+            debug!("Appending offset to end of array");
             // Add to end
             let start = self.header.free_space_start as usize;
             
             &mut self.page_buffer[start..start+4]
         } else {
+            debug!("Adding offset into middle of array");
             // Shift everything to right over
 
             let to_shift = self.header.items_stored - right_index;
             let end = self.header.free_space_start as usize;
             let start = end - (4*to_shift as usize);
-            self.page_buffer.as_mut_slice().copy_within(start..end, end+4);
+            self.page_buffer.as_mut_slice().copy_within(start..end, start+4);
 
             &mut self.page_buffer[start..start+4]
         };
@@ -248,7 +252,7 @@ impl Node {
             };
         }
 
-        info!("Appending entry to free space");
+        debug!("Appending entry to free space");
 
         // No available free blocks that fit requirements
         if self.header.free_space_end - self.header.free_space_start < new_entry.size() as u32 {
@@ -265,9 +269,8 @@ impl Node {
         
         // Double check changes worked?
 
-        let offsets = Self::get_offsets_array(&self.header, self.page_id, &self.page_buffer).unwrap();
-        info!("Offsets: {:#?}", offsets);
-        assert_eq!(offsets.last().unwrap().clone(), record_offset as u32);
+        // let offsets = Self::get_offsets_array(&self.header, self.page_id, &self.page_buffer).unwrap();
+        // debug!("Offsets: {:#?}", offsets);
     }
 
     // TODO: function to insert new entry, finds best empty spot for it and encodes it
