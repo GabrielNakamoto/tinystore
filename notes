@@ -25,7 +25,8 @@ Current todo:
 
 What kind of operations should be easy?:
 
-Node => header + offsets array + data entries + free block linked list
+Node => header + offsets array + data entries + free block linked lisear
+
 
 
 

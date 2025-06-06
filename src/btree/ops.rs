@@ -64,8 +64,11 @@ pub fn get_record(mut key : Vec<u8>, pager : &mut Pager) -> std::io::Result<Vec<
 }
 
 pub fn search(key : &Vec<u8>, pager : &mut Pager) -> std::io::Result<Node> {
-    let root_page_id = get_db_header(pager)?.root_node as u32;
+    let db_header = get_db_header(pager)?;
+    let root_page_id = db_header.root_node as u32;
     let mut cur_page_id = root_page_id;
+
+    debug!("Starting b+tree search at root id: {}", root_page_id);
 
     while true {
         debug!("Searching node at page id: {}", cur_page_id);
@@ -109,6 +112,7 @@ pub fn insert_record(mut key : Vec<u8>, mut value : Vec<u8>, pager : &mut Pager)
     if node.header.free_space_end - node.header.free_space_start < (key.len() + value.len()) as u32 {
         info!("Node at id: {} overflowed", node.page_id);
         split_node(&mut node, pager);
+        node = search(&key, pager)?;
     }
 
     let data_entry = DataEntry::Leaf(key, value);
@@ -116,7 +120,7 @@ pub fn insert_record(mut key : Vec<u8>, mut value : Vec<u8>, pager : &mut Pager)
 
     // Request changes to page cache
     // TODO: Look at buffered writes
-    pager.save_page(&node.page_buffer.to_vec(), Some(node.page_id));
+    pager.save_page(&node.page_buffer, Some(node.page_id));
     Ok(())
 }
 
@@ -149,12 +153,21 @@ pub fn split_node(node : &mut Node, pager : &mut Pager) -> std::io::Result<()> {
     let mut right_node = Node::new(node.header.node_type.clone(), pager);
     right_node.encode_header();
 
-    for i in (node.header.items_stored as usize)-to_move..node.header.items_stored as usize { 
-        debug!("Moving entry at index {} to right split node", i);
-        let record = node.decode_data_entry(i)?;
+    // ex moving 50 items out of 100
+    // I would need to go from idnex 100-50-1 = 49 => 100 - 1
+    info!("Items: {}", node.header.items_stored);
+
+    // The problem is the indices keep moving as I remove records
+    // just start at the last offset at moving backwards
+
+    // for i in (node.header.items_stored as usize)-to_move-1..node.header.items_stored as usize-1 { 
+    for i in 1..=to_move {
+        let idx = (node.header.items_stored as usize) - i;
+        debug!("Moving entry at index {} to right split node", idx);
+        let record = node.decode_data_entry(idx)?;
 
         right_node.insert_data_entry(&record);
-        node.remove_data_entry(i)?;
+        node.remove_data_entry(idx)?;
     }
     info!("Split right node: {:#?}", right_node.header);
     pager.save_page(&right_node.page_buffer, None);
@@ -176,14 +189,13 @@ pub fn split_node(node : &mut Node, pager : &mut Pager) -> std::io::Result<()> {
         info!("New root node at page id: {}", parent_node.page_id);
         db_header.root_node = parent_node.page_id as u16;
 
-        let mut encoded_header : Vec<u8> = vec![0u8; DB_HEADER_SIZE];
+        // let mut encoded_header : Vec<u8> = vec![0u8; DB_HEADER_SIZE];
         bincode::encode_into_slice(
             &db_header,
-            encoded_header.as_mut_slice(),
+            &mut node.page_buffer[..DB_HEADER_SIZE],
             bincode::config::standard());
-        pager.save_page(&encoded_header, Some(0));
-
-        info!("Updated db header: {:#?}", db_header);
+        // pager.save_page(&encoded_header, Some(0))?;
+        info!("Updated db header: {:#?}", get_db_header(pager)?);
     }
 
     node.header.parent = parent_node.page_id as i32;

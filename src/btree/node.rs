@@ -198,6 +198,7 @@ impl Node {
     }
 
     pub fn decode_data_entry(&self, entry_id : usize) -> std::io::Result<DataEntry> {
+        debug!("Decoding entry: {} out of {}", entry_id, self.offsets_array.len());
         let entry_offset = self.offsets_array.get(entry_id).copied().unwrap() as usize;
 
         DataEntry::decode(&self.page_buffer, entry_offset, &self.header.node_type)
@@ -246,10 +247,10 @@ impl Node {
         if let Some(mut iter) = FreeBlockIter::new(self) {
             let available_index = iter.position(|block| block.total_size as u32 >= new_entry.size());
             if let Some(idx) = available_index {
-                info!("Found available free block");
+                info!("Found available free block at linked list index: {}", idx);
                 // TODO: make function that will remove a free block and update ptrs
 
-                let new_offset = if idx - 1 < 0 {
+                let new_offset = if idx == 0 {
                     self.header.first_free_block_offset
                 } else {
                     // get offset from previous block
@@ -285,31 +286,25 @@ impl Node {
         
         self.offsets_array = Self::get_offsets_array(&self.header, self.page_id, &self.page_buffer).unwrap();
         // Double check changes worked?
-
-        // let offsets = Self::get_offsets_array(&self.header, self.page_id, &self.page_buffer).unwrap();
-        // debug!("Offsets: {:#?}", offsets);
     }
-
-    // TODO: function to insert new entry, finds best empty spot for it and encodes it
 
     // Optimize this, to batch together removals / updating offsets array
     pub fn remove_data_entry(&mut self, entry_id : usize) -> std::io::Result<()> {
         let entry_offset = self.offsets_array[entry_id] as usize;
 
-        let iter = FreeBlockIter::new(self);
-
         // Update block chain / page header
-        let next_ptr = match iter {
+        let next_ptr = match FreeBlockIter::new(self) {
             Some(mut iter) => {
                 // TODO: handle option => results
-                // let mut prev_iter = PrevPeekable::new(iter);
                 let mut prev_vec : Vec<_> = iter.collect();
 
+                // debug!("Free block list: {:#?}", prev_vec);
                 let update_block_index = prev_vec.iter()
                     .position(|block| {
                         block.next_ptr > entry_offset as u16
                     }).unwrap_or(prev_vec.len() - 1);
 
+                debug!("Left free index block: {}", update_block_index);
                 let mut update_block = prev_vec[update_block_index].clone();
 
                 let left_ptr = if update_block_index > 0 {
@@ -347,8 +342,8 @@ impl Node {
             next_ptr: next_ptr as u16,
             total_size: entry.size() as u16
         };
-    
         debug!("New free block: {:#?}", block);
+        debug!("Encoding new block at offset: {}", entry_offset);
 
         // Encode new block
         bincode::encode_into_slice(
@@ -360,11 +355,15 @@ impl Node {
         let to_shift = self.header.items_stored as usize-entry_id;
 
         // Just move entire slice at once
-        let shift_start = if self.page_id == 0 { DB_HEADER_SIZE } else { 0 } + NODE_HEADER_SIZE + (to_shift as usize * 4);
-        &mut self.page_buffer.copy_within(shift_start..self.header.free_space_start as usize, shift_start-1);
+        let shift_start = (if self.page_id == 0 { DB_HEADER_SIZE } else { 0 }) + NODE_HEADER_SIZE + (to_shift as usize * 4);
+
+        debug!("Moving {} offsets starting at offset {} <= 4 bytes", to_shift, shift_start);
+        &mut self.page_buffer.copy_within(shift_start..self.header.free_space_start as usize, shift_start-4);
 
         self.header.free_space_start -= 4;
+        self.header.items_stored -= 1;
         self.encode_header();
+
         self.offsets_array = Self::get_offsets_array(&self.header, self.page_id, &self.page_buffer).unwrap();
         Ok(())
     }
