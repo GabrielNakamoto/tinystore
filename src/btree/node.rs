@@ -1,5 +1,5 @@
 use prev_iter::PrevPeekable;
-use log::{info, warn};
+use log::{info, warn, debug};
 use super::entry::DataEntry;
 use crate::{
     constants::{
@@ -10,7 +10,7 @@ use crate::{
 };
 use bincode::{Decode, Encode};
 
-pub const NODE_HEADER_SIZE : usize = 26;
+pub const NODE_HEADER_SIZE : usize = 30;
 pub const M : usize = 5;
 
 
@@ -29,7 +29,8 @@ pub struct NodeHeader {
     pub free_space_end : u32,
     pub items_stored : u32,
     pub first_free_block_offset : u16,
-    pub rightmost_child: u32
+    pub rightmost_child: u32,
+    pub parent: i32
 }
 
 impl NodeHeader {
@@ -41,7 +42,8 @@ impl NodeHeader {
             free_space_end,
             items_stored,
             first_free_block_offset: 0,
-            rightmost_child: 0
+            rightmost_child: 0,
+            parent: -1
         }
     }
 }
@@ -104,7 +106,7 @@ impl<'a> FreeBlockIter<'a> {
 impl Node {
     pub fn first_free_block(&self) -> Option<FreeBlock> {
         if self.header.first_free_block_offset == 0 {
-            info!("No free blocks");
+            debug!("No free blocks");
             None
         } else {
             let start = self.header.first_free_block_offset as usize;
@@ -113,7 +115,7 @@ impl Node {
             let block : FreeBlock = bincode::decode_from_slice(
                 &self.page_buffer[start..end], bincode::config::standard()).ok().map(|(block, _)| block)?;
 
-            info!("Root free block at: {}", start);
+            debug!("Root free block at: {}", start);
 
             Some(block)
         }
@@ -124,6 +126,8 @@ impl Node {
 
         let header = Self::get_header(page_id, &page_buffer)?;
         let offsets_array = Self::get_offsets_array(&header, page_id, &page_buffer)?;
+
+        assert_eq!(header.items_stored as usize, offsets_array.len());
 
         Ok(Node {
             page_id,
@@ -183,6 +187,89 @@ impl Node {
         DataEntry::decode(&self.page_buffer, entry_offset, &self.header.node_type)
     }
 
+    fn encode_entry_offset(&mut self, new_entry : &DataEntry, entry_offset : u32) {
+        // Find spot where entry belongs
+        let mut right_index = self.header.items_stored + 1;
+        for i in 0..self.header.items_stored {
+            let entry = self.decode_data_entry(i as usize).unwrap();
+
+            if entry.key() > new_entry.key() {
+                right_index = i;
+                break;
+            }
+        }
+
+        let mut entry_slice = if right_index == self.header.items_stored + 1 {
+            // Add to end
+            let start = self.header.free_space_start as usize;
+            
+            &mut self.page_buffer[start..start+4]
+        } else {
+            // Shift everything to right over
+
+            let to_shift = self.header.items_stored - right_index;
+            let end = self.header.free_space_start as usize;
+            let start = end - (4*to_shift as usize);
+            self.page_buffer.as_mut_slice().copy_within(start..end, end+4);
+
+            &mut self.page_buffer[start..start+4]
+        };
+
+        bincode::encode_into_slice(&entry_offset, entry_slice, bincode::config::standard());
+
+        self.header.free_space_start += 4;
+    }
+    
+    pub fn insert_data_entry(&mut self, new_entry : &DataEntry) {
+        // Search free blocks first
+        // Handle none
+        if let Some(mut iter) = FreeBlockIter::new(self) {
+            let available_index = iter.position(|block| block.total_size as u32 >= new_entry.size());
+            if let Some(idx) = available_index {
+                info!("Found available free block");
+                // TODO: make function that will remove a free block and update ptrs
+
+                let new_offset = if idx - 1 < 0 {
+                    self.header.first_free_block_offset
+                } else {
+                    // get offset from previous block
+                    iter.nth(idx - 1).unwrap().next_ptr
+                } as usize;
+
+                let entry_slice =
+                    &mut self.page_buffer[new_offset..new_offset+new_entry.size() as usize];
+                new_entry.encode(entry_slice);
+
+                self.encode_entry_offset(&new_entry, new_offset as u32);
+
+                self.header.items_stored += 1;
+                self.encode_header();
+                return;
+            };
+        }
+
+        info!("Appending entry to free space");
+
+        // No available free blocks that fit requirements
+        if self.header.free_space_end - self.header.free_space_start < new_entry.size() as u32 {
+            // TODO: handle overflow!!, make overflow error type
+        }
+
+        let record_offset = (self.header.free_space_end - new_entry.size()) as usize;
+        new_entry.encode(&mut self.page_buffer[record_offset..self.header.free_space_end as usize]);
+        self.encode_entry_offset(&new_entry, record_offset as u32);
+
+        self.header.items_stored += 1;
+        self.header.free_space_end -= new_entry.size() as u32;
+        self.encode_header();
+        
+        // Double check changes worked?
+
+        let offsets = Self::get_offsets_array(&self.header, self.page_id, &self.page_buffer).unwrap();
+        info!("Offsets: {:#?}", offsets);
+        assert_eq!(offsets.last().unwrap().clone(), record_offset as u32);
+    }
+
     // TODO: function to insert new entry, finds best empty spot for it and encodes it
 
     // Optimize this, to batch together removals / updating offsets array
@@ -214,7 +301,7 @@ impl Node {
                 let info = update_block;
                 let right_ptr = update_block.next_ptr as usize;
                 update_block.next_ptr = entry_offset as u16;
-                info!("Updated left free block:\n{:?} => {:?}", info, update_block);
+                debug!("Updated left free block:\n{:?} => {:?}", info, update_block);
 
                 // Update previous node in linked list to contain ptr to new block
                 bincode::encode_into_slice(
@@ -242,7 +329,7 @@ impl Node {
             // total_size: self.decode_data_entry(entry_id)?.size() as u16
         };
     
-        info!("New free block: {:#?}", block);
+        debug!("New free block: {:#?}", block);
         // Encode new block
         bincode::encode_into_slice(
             &block,

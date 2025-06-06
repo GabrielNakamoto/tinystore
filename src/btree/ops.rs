@@ -1,9 +1,11 @@
+use log::{info,debug};
 use std::io::{
     Error as IOError,
     ErrorKind
 };
 use crate::{
     constants::{
+        DBHeader,
         DB_HEADER_SIZE,
         PAGE_SIZE
     },
@@ -30,6 +32,12 @@ pub fn initialize_tree(page_buffer : &mut Vec<u8>) -> std::io::Result<()> {
     Ok(())
 }
 
+fn get_db_header(pager : &mut Pager) -> std::io::Result<DBHeader> {
+    let first_page_buffer = pager.get_page(0)?.0;
+
+    Ok(bincode::decode_from_slice(&first_page_buffer[..DB_HEADER_SIZE], bincode::config::standard()).unwrap().0)
+}
+
 pub fn get_record(mut key : Vec<u8>, pager : &mut Pager) -> std::io::Result<Vec<u8>> {
     let mut node = search(&key, pager)?;
 
@@ -40,24 +48,26 @@ pub fn get_record(mut key : Vec<u8>, pager : &mut Pager) -> std::io::Result<Vec<
     for i in 0..node.header.items_stored {
         match node.decode_data_entry(i as usize)? {
             DataEntry::Leaf(entry_key, value) => {
+                // debug!("{:?} / {:?}", entry_key, key);
                 if entry_key == key {
                     return Ok(value);
                 }
             },
             _ => {
                 // Error
-                return Err(IOError::new(ErrorKind::Other, "oh no"));
+                return Err(IOError::new(ErrorKind::Other, "Got internal entry"));
             }
         };
     }
-
-    return Err(IOError::new(ErrorKind::Other, "oh no"));
+    return Err(IOError::new(ErrorKind::Other, "Couldn't find entry"));
 }
 
 pub fn search(key : &Vec<u8>, pager : &mut Pager) -> std::io::Result<Node> {
-    let mut cur_page_id = 0;
+    let root_page_id = get_db_header(pager)?.root_node as u32;
+    let mut cur_page_id = root_page_id;
 
     while true {
+        info!("Searching node at page id: {}", cur_page_id);
         let node = Node::deserialize(cur_page_id, pager)?;
 
         match node.header.node_type {
@@ -97,36 +107,37 @@ pub fn insert_record(mut key : Vec<u8>, mut value : Vec<u8>, pager : &mut Pager)
 
     // Overflowed
     if node.header.free_space_end - node.header.free_space_start < (key.len() + value.len()) as u32 {
-        // println!("Overflowed");
-        // return Err(IOError::new(ErrorKind::Other, "oh no"));
+        info!("Node at id: {} overflowed", node.page_id);
         split_node(&mut node, pager);
         // let new_node = node.split(pager)?;
     }
 
-    let record_offset = node.header.free_space_end-((key.len() + value.len() + 8) as u32);
-    let key_size = key.len() as u32;
-    let value_size = value.len() as u32;
+    let data_entry = DataEntry::Leaf(key, value);
+    node.insert_data_entry(&data_entry);
+    // let record_offset = node.header.free_space_end-((key.len() + value.len() + 8) as u32);
+    // let key_size = key.len() as u32;
+    // let value_size = value.len() as u32;
 
     // Update Metadata Section
-    let meta_end_offset = node.header.free_space_start as usize;
-    let meta_entry_slice = &mut node.page_buffer[meta_end_offset..meta_end_offset+4];
-    bincode::encode_into_slice(record_offset, meta_entry_slice, bincode::config::standard());
+    // let meta_end_offset = node.header.free_space_start as usize;
+    // let meta_entry_slice = &mut node.page_buffer[meta_end_offset..meta_end_offset+4];
+    // bincode::encode_into_slice(record_offset, meta_entry_slice, bincode::config::standard());
 
     // TODO: Store key value sizes in record section? Only store offsets at start
 
-    let record_end = node.header.free_space_end as usize;
+    // let record_end = node.header.free_space_end as usize;
 
     // Update node header
-    node.header.free_space_start += 4;
-    node.header.free_space_end -= (key.len() + value.len() + 8) as u32;
-    node.header.items_stored += 1;
-    node.encode_header();
+    // node.header.free_space_start += 4;
+    // node.header.free_space_end -= (key.len() + value.len() + 8) as u32;
+    // node.header.items_stored += 1;
+    // node.encode_header();
 
     // Update Record Section
-    let mut record_slice =
-        &mut node.page_buffer[record_offset as usize..record_end];
-    let data_entry = DataEntry::Leaf(key, value);
-    data_entry.encode(&mut record_slice);
+    // let mut record_slice =
+    //     &mut node.page_buffer[record_offset as usize..record_end];
+    // let data_entry = DataEntry::Leaf(key, value);
+    // data_entry.encode(&mut record_slice);
 
     // Request changes to page cache
     // TODO: Look at buffered writes
@@ -179,6 +190,8 @@ pub fn split_node(node : &mut Node, pager : &mut Pager) -> std::io::Result<()> {
             free_space_end as u32,
             to_move as u32);
 
+        info!("Split right node: {:#?}", right_node_header);
+
         bincode::encode_into_slice(
             &right_node_header,
             &mut right_page_buffer[..NODE_HEADER_SIZE],
@@ -192,7 +205,6 @@ pub fn split_node(node : &mut Node, pager : &mut Pager) -> std::io::Result<()> {
 
     }
 
-    pager.save_page(&node.page_buffer, Some(node.page_id));
     let right_id = pager.save_page(&right_page_buffer.to_vec(), None)? as u32;
 
     // Create upper node and move the split pointer
@@ -205,6 +217,8 @@ pub fn split_node(node : &mut Node, pager : &mut Pager) -> std::io::Result<()> {
             (PAGE_SIZE as u32) - entry_size,
             1);
         top_node_header.rightmost_child = right_id;
+
+        info!("Split top node: {:#?}", top_node_header);
 
         bincode::encode_into_slice(
             &top_node_header,
@@ -223,7 +237,26 @@ pub fn split_node(node : &mut Node, pager : &mut Pager) -> std::io::Result<()> {
         // Node::encode_data_entry(&mut top_page_buffer[offset..], &split_entry);
     }
 
-    pager.save_page(&top_page_buffer.to_vec(), None);
+    let parent_id = pager.save_page(&top_page_buffer.to_vec(), None)? as i32;
+
+    let mut db_header = get_db_header(pager)?;
+    if db_header.root_node as u32 == node.page_id {
+        info!("New root node at page id: {}", parent_id);
+        db_header.root_node = parent_id as u16;
+        let mut encoded_header : Vec<u8> = vec![0u8; DB_HEADER_SIZE];
+        bincode::encode_into_slice(
+            &db_header,
+            encoded_header.as_mut_slice(),
+            bincode::config::standard());
+        pager.save_page(&encoded_header, Some(0));
+
+        info!("Updated db header: {:#?}", get_db_header(pager)?);
+    }
+
+    node.header.items_stored -= tm as u32;
+    node.header.parent = parent_id;
+    node.encode_header();
+    pager.save_page(&node.page_buffer, Some(node.page_id));
 
     Ok(())
 }

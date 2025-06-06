@@ -15,7 +15,7 @@ fn random_string(n : usize) -> String {
 
 fn main() {
     env_logger::init();
-    let n : u32 = 150;
+    let n : u32 = 75;
     let mut entries : HashMap<String, String> = HashMap::new();
 
     // Generate random entries

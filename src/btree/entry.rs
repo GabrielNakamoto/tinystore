@@ -10,8 +10,15 @@ pub enum DataEntry {
 impl DataEntry {
     pub fn size(&self) -> u32 {
         match self {
-            DataEntry::Leaf(key, value) => (8 + key.len() + value.len()) as u32,
-            DataEntry::Internal(key, page_id) => (8 + key.len()) as u32
+            Self::Leaf(key, value) => (8 + key.len() + value.len()) as u32,
+            Self::Internal(key, page_id) => (8 + key.len()) as u32
+        }
+    }
+
+    pub fn key(&self) -> &Vec<u8> {
+        match self {
+            Self::Leaf(key, _) => key,
+            Self::Internal(key, _) => key
         }
     }
 
