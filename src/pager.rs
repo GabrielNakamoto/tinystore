@@ -1,5 +1,5 @@
 use crate::constants::PAGE_SIZE;
-use log::info;
+use log::{info,debug};
 use std::fs::File;
 use std::io::{
     Read,
@@ -56,7 +56,7 @@ impl Pager {
                 assert_eq!(pos % PAGE_SIZE, 0);
 
                 let new_page_id : usize = pos / PAGE_SIZE;
-                info!("Creating new page at id: {}", new_page_id);
+                debug!("Creating new page at id: {}", new_page_id);
 
                 self.file_handle.write(&page_buffer[..]);
                 self.file_handle.rewind();
@@ -64,7 +64,7 @@ impl Pager {
                 Ok(new_page_id)
             },
             Some(id) => { // update page
-                info!("Writing {} bytes to page at id: {}", page_buffer.len(), id);
+                debug!("Writing {} bytes to page at id: {}", page_buffer.len(), id);
                 self.file_handle.seek(SeekFrom::Start((id * PAGE_SIZE as u32) as u64));
                 self.file_handle.write(&page_buffer[..]);
                 self.file_handle.rewind();

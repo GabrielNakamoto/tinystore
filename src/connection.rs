@@ -15,15 +15,6 @@ pub struct Connection {
     pager : Pager
 }
 
-///
-/// Public user / application interface 
-///
-/// Put(key, value)
-/// Get(key) -> value
-/// Delete(key)
-///
-///     *Put will update value if key already exists
-///
 impl Connection {
     pub fn open(db_path : &Path, config : Config) -> std::io::Result<Connection> {
         let mut connection = Connection {

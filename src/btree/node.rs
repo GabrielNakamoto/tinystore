@@ -1,6 +1,9 @@
 use prev_iter::PrevPeekable;
 use log::{info, warn, debug};
-use super::entry::DataEntry;
+use super::{
+    entry::DataEntry,
+    error::NodeError
+};
 use crate::{
     constants::{
         DB_HEADER_SIZE,
@@ -10,9 +13,11 @@ use crate::{
 };
 use bincode::{Decode, Encode};
 
-pub const NODE_HEADER_SIZE : usize = 30;
-pub const M : usize = 5;
+pub const NODE_HEADER_SIZE: usize = 30;
+pub const M: usize = 5;
+pub const PAGE_PTR_SIZE: usize = 2;
 
+type PagePtr = u16;
 
 #[derive(Decode, Encode, Debug, Clone, PartialEq)]
 pub enum NodeType {
@@ -34,11 +39,11 @@ pub struct NodeHeader {
 }
 
 impl NodeHeader {
-    pub fn new(node_type: NodeType) -> Self {
+    pub fn new(node_type: NodeType, free_space_start: u32) -> Self {
         Self {
             magic_numbers: [80, 65, 71, 69],
             node_type,
-            free_space_start: NODE_HEADER_SIZE as u32,
+            free_space_start,
             free_space_end: PAGE_SIZE as u32,
             items_stored: 0,
             first_free_block_offset: 0,
@@ -66,6 +71,11 @@ pub struct Node {
     pub page_buffer : Vec<u8>,
     pub header: NodeHeader,
     pub offsets_array : Vec<u32>
+}
+
+pub enum InsertResult {
+    Success,
+    NeedsSplit
 }
 
 #[derive(Decode, Encode, Clone, Copy, Debug)]
@@ -131,11 +141,16 @@ impl Node {
         }
     }
 
+    fn offsets_ptr(page_id: u32) -> PagePtr {
+        (if page_id == 0 { DB_HEADER_SIZE + NODE_HEADER_SIZE } else { NODE_HEADER_SIZE }) as PagePtr
+    }
+
     pub fn new(node_type : NodeType, pager : &mut Pager) -> Self {
+        let page_id = pager.next_page_id();
         Self {
-            page_id: pager.next_page_id(),
+            page_id: page_id,
             page_buffer: Pager::allocate_page_buffer(),
-            header: NodeHeader::new(node_type),
+            header: NodeHeader::new(node_type, Self::offsets_ptr(page_id) as u32),
             offsets_array: Vec::new()
         }
     }
@@ -198,7 +213,8 @@ impl Node {
     }
 
     pub fn decode_data_entry(&self, entry_id : usize) -> std::io::Result<DataEntry> {
-        debug!("Decoding entry: {} out of {}", entry_id, self.offsets_array.len());
+        // debug!("Decode entry id: {}, 
+        // debug!("Decoding entry: {} out of {}", entry_id, self.offsets_array.len());
         let entry_offset = self.offsets_array.get(entry_id).copied().unwrap() as usize;
 
         DataEntry::decode(&self.page_buffer, entry_offset, &self.header.node_type)
@@ -216,7 +232,7 @@ impl Node {
             }
         }
 
-        debug!("Offset right index: {}", right_index);
+        debug!("Right entry id: {}", right_index);
         debug!("New entry offset: {}", entry_offset);
         let mut entry_slice = if right_index == self.header.items_stored + 1 {
             debug!("Appending offset to end of array");
@@ -231,6 +247,7 @@ impl Node {
             let to_shift = self.header.items_stored - right_index;
             let end = self.header.free_space_start as usize;
             let start = end - (4*to_shift as usize);
+            debug!("Shifting {} items from {} => {}", to_shift, end, end+4);
             self.page_buffer.as_mut_slice().copy_within(start..end, start+4);
 
             &mut self.page_buffer[start..start+4]
@@ -240,131 +257,188 @@ impl Node {
 
         self.header.free_space_start += 4;
     }
+
+    fn find_block_offset(&self, vec : &Vec<FreeBlock>, index: usize) -> PagePtr {
+        if index == 0 {
+            self.header.first_free_block_offset as PagePtr
+        } else {
+            vec[index-1].next_ptr
+        }
+    }
+
+    fn remove_free_block(&mut self, vec : &Vec<FreeBlock>, index: usize, next_ptr: PagePtr) -> Result<(), NodeError> {
+        if index == 0 {
+            self.header.first_free_block_offset = next_ptr;
+        } else {
+            let mut left_block = vec[index-1].clone();
+            left_block.next_ptr = next_ptr;
+
+            let left_offset = self.find_block_offset(vec, index-1) as usize;
+            bincode::encode_into_slice(
+                &left_block, 
+                &mut self.page_buffer[left_offset..left_offset+4],
+                bincode::config::standard())?;
+        }
+        Ok(())
+    }
+
+    // Updates block at index to point at new block offset, returning the offset
+    // to the old 'right block'
+    fn update_left_block(&mut self, blocklist: &Vec<FreeBlock>, index: usize, new_offset: PagePtr) -> PagePtr {
+        let left_ptr = self.find_block_offset(&blocklist, index) as usize;
+
+        let mut left_block = blocklist[index];
+        let right_ptr = left_block.next_ptr;
+        left_block.next_ptr = new_offset;
+
+        bincode::encode_into_slice(
+            &left_block,
+            &mut self.page_buffer[left_ptr..left_ptr+4],
+            bincode::config::standard());
+
+        right_ptr
+    }
+
+    fn insert_free_block(&mut self, new_offset: PagePtr, block_size: u16) {
+        let next_ptr = if let Some(iter) = FreeBlockIter::new(self) {
+            let blocklist: Vec<FreeBlock> = iter.collect();
+            let index = blocklist.iter()
+                .position(|block| block.next_ptr > new_offset)
+                .unwrap_or(blocklist.len()-1);
+
+            self.update_left_block(&blocklist, index, new_offset)
+        } else {
+            self.header.first_free_block_offset = new_offset as PagePtr;
+            0
+        } as u16;
+
+        let block = FreeBlock {
+            next_ptr,
+            total_size: block_size
+        };
+
+        let start = new_offset as usize;
+        bincode::encode_into_slice(
+            &block,
+            &mut self.page_buffer[start..start+4],
+            bincode::config::standard());
+    }
     
-    pub fn insert_data_entry(&mut self, new_entry : &DataEntry) {
-        // Search free blocks first
-        // Handle none
-        if let Some(mut iter) = FreeBlockIter::new(self) {
-            let available_index = iter.position(|block| block.total_size as u32 >= new_entry.size());
-            if let Some(idx) = available_index {
-                info!("Found available free block at linked list index: {}", idx);
-                // TODO: make function that will remove a free block and update ptrs
+    // Returns offset to start of free space
+    fn find_and_remove_free_block(&mut self, min_capacity: u32) -> Option<PagePtr> {
+        let iter_vec : Vec<_> = FreeBlockIter::new(self)?.collect();
+        let idx = iter_vec.iter()
+            .position(|block| block.total_size as u32 >= min_capacity)?;
 
-                let new_offset = if idx == 0 {
-                    self.header.first_free_block_offset
-                } else {
-                    // get offset from previous block
-                    iter.nth(idx - 1).unwrap().next_ptr
-                } as usize;
+        debug!("Found available free block at linked list index: {}", idx);
 
-                let entry_slice =
-                    &mut self.page_buffer[new_offset..new_offset+new_entry.size() as usize];
-                new_entry.encode(entry_slice);
+        let block = iter_vec[idx];
 
-                self.encode_entry_offset(&new_entry, new_offset as u32);
+        let offset = self.find_block_offset(&iter_vec, idx);
+        self.remove_free_block(&iter_vec, idx, block.next_ptr);
 
-                self.header.items_stored += 1;
-                self.encode_header();
-                return;
-            };
+        Some(offset)
+    }
+    
+    pub fn insert_data_entry(&mut self, new_entry : &DataEntry) -> InsertResult {
+        info!("Inserting entry #{} at page id {}", self.header.items_stored + 1, self.page_id);
+        let is_room : bool = self.header.free_space_end - self.header.free_space_start >= (new_entry.size() as u32 + 4);
+
+        let offset = self.find_and_remove_free_block(new_entry.size() as u32)
+            .unwrap_or_else(|| {
+                debug!("Appending entry to free space");
+                self.header.free_space_end -= new_entry.size() as u32;
+
+                self.header.free_space_end as PagePtr
+            }) as usize;
+
+        if (! is_room) && offset as u32 == self.header.free_space_end {
+            debug!("Node id: {} overflowed", self.page_id);
+            return InsertResult::NeedsSplit;
         }
 
-        debug!("Appending entry to free space");
-
-        // No available free blocks that fit requirements
-        if self.header.free_space_end - self.header.free_space_start < new_entry.size() as u32 {
-            // TODO: handle overflow!!, make overflow error type
-        }
-
-        let record_offset = (self.header.free_space_end - new_entry.size()) as usize;
-        new_entry.encode(&mut self.page_buffer[record_offset..self.header.free_space_end as usize]);
-        self.encode_entry_offset(&new_entry, record_offset as u32);
+        new_entry.encode(&mut self.page_buffer[offset..offset+(new_entry.size() as usize)]);
+        self.encode_entry_offset(&new_entry, offset as u32);
 
         self.header.items_stored += 1;
-        self.header.free_space_end -= new_entry.size() as u32;
         self.encode_header();
-        
+
         self.offsets_array = Self::get_offsets_array(&self.header, self.page_id, &self.page_buffer).unwrap();
-        // Double check changes worked?
+        // for i in 0..self.header.items_stored {
+        //     debug!("Offset {}: {}", i, self.offsets_array[i as usize]);
+        // }
+
+        InsertResult::Success
     }
 
     // Optimize this, to batch together removals / updating offsets array
     pub fn remove_data_entry(&mut self, entry_id : usize) -> std::io::Result<()> {
-        let entry_offset = self.offsets_array[entry_id] as usize;
+        info!("Removing entry #{} at page id {}", entry_id, self.page_id);
+        let entry_offset = self.offsets_array[entry_id] as PagePtr;
+        let entry = self.decode_data_entry(entry_id)?; // Error here?
 
-        // Update block chain / page header
-        let next_ptr = match FreeBlockIter::new(self) {
-            Some(mut iter) => {
-                // TODO: handle option => results
-                let mut prev_vec : Vec<_> = iter.collect();
+        self.insert_free_block(entry_offset, entry.size() as u16);
+    
+        let slice_start = Self::offsets_ptr(self.page_id) as usize;
+        let slice_end = self.header.free_space_start as usize;
+        let mut offsets_slice = &mut self.page_buffer[slice_start..slice_end];
 
-                // debug!("Free block list: {:#?}", prev_vec);
-                let update_block_index = prev_vec.iter()
-                    .position(|block| {
-                        block.next_ptr > entry_offset as u16
-                    }).unwrap_or(prev_vec.len() - 1);
-
-                debug!("Left free index block: {}", update_block_index);
-                let mut update_block = prev_vec[update_block_index].clone();
-
-                let left_ptr = if update_block_index > 0 {
-                    prev_vec[update_block_index-1].next_ptr
-                } else {
-                    self.header.first_free_block_offset
-                } as usize;
-
-                let info = update_block;
-                let right_ptr = update_block.next_ptr as usize;
-                update_block.next_ptr = entry_offset as u16;
-                debug!("Updated left free block:\n{:?} => {:?}", info, update_block);
-
-                // Update previous node in linked list to contain ptr to new block
-                bincode::encode_into_slice(
-                    &update_block,
-                    &mut self.page_buffer[left_ptr..left_ptr+4],
-                    bincode::config::standard());
-
-                // Return ptr to next block
-                right_ptr
-            },
-            None => {
-                // Add to page header
-                self.header.first_free_block_offset = entry_offset as u16;
-                self.encode_header();
-
-                0
-            }
-        };
-
-        // Create free block
-        let entry = self.decode_data_entry(entry_id)?;
-        let block = FreeBlock {
-            next_ptr: next_ptr as u16,
-            total_size: entry.size() as u16
-        };
-        debug!("New free block: {:#?}", block);
-        debug!("Encoding new block at offset: {}", entry_offset);
-
-        // Encode new block
-        bincode::encode_into_slice(
-            &block,
-            &mut self.page_buffer[entry_offset..entry_offset + 4],
-            bincode::config::standard());
-
-        // Update offsets array
-        let to_shift = self.header.items_stored as usize-entry_id;
-
-        // Just move entire slice at once
-        let shift_start = (if self.page_id == 0 { DB_HEADER_SIZE } else { 0 }) + NODE_HEADER_SIZE + (to_shift as usize * 4);
-
-        debug!("Moving {} offsets starting at offset {} <= 4 bytes", to_shift, shift_start);
-        &mut self.page_buffer.copy_within(shift_start..self.header.free_space_start as usize, shift_start-4);
+        let start = entry_id*4;
+        // let end = self.header.free_space_start as usize;
+        offsets_slice.copy_within(start.., start-4);
 
         self.header.free_space_start -= 4;
         self.header.items_stored -= 1;
         self.encode_header();
 
-        self.offsets_array = Self::get_offsets_array(&self.header, self.page_id, &self.page_buffer).unwrap();
+        self.offsets_array =
+            Self::get_offsets_array(&self.header, self.page_id, &self.page_buffer).unwrap();
+
+        if let Some(iter) = FreeBlockIter::new(self) {
+            let blocklist: Vec<FreeBlock> = iter.collect();
+            
+            info!("Updated free list: {:#?}", blocklist);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rand::{thread_rng, Rng};
+    use rand::prelude::*;
+    use crate::pager::Pager;
+    use super::*;
+    use std::path::Path;
+    fn random_string(n : usize) -> String {
+        thread_rng()
+            .sample_iter(rand::distr::Alphanumeric)
+            .take(n)
+            .map(char::from)
+            .collect()
+    }
+
+    #[test]
+    fn insertion_test() -> std::io::Result<()> {
+        let mut rng = rand::rng();
+
+        let key_len = rng.random_range(1..=100) as usize;
+        let value_len = rng.random_range(1..=100) as usize;
+        let key = random_string(key_len).into_bytes();
+        let value = random_string(value_len).into_bytes();
+
+        let test_db = Path::new("testing_db");
+        let mut pager = Pager::new(&test_db)?;
+        let mut node = Node::new(NodeType::Leaf, &mut pager);
+
+        let entry = DataEntry::Leaf(key.clone(), value.clone());
+
+        node.insert_data_entry(&entry);
+        if let DataEntry::Leaf(K, V) = node.decode_data_entry(0)? {
+            assert_eq!(K, key);
+            assert_eq!(V, value);
+        }
+
         Ok(())
     }
 }

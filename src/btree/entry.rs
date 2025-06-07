@@ -1,7 +1,10 @@
-use super::node::{
-    NodeType
+use log::{info,debug};
+use super::{
+    node::NodeType,
+    error::NodeError
 };
 
+#[derive(Debug)]
 pub enum DataEntry {
     Internal(Vec<u8>, u32), // Key, Child ptr (page_id)
     Leaf(Vec<u8>, Vec<u8>), // Key, Value
@@ -24,10 +27,12 @@ impl DataEntry {
 
     pub fn decode(page_buffer : &Vec<u8>, entry_offset: usize, node_type : &NodeType) -> std::io::Result<Self> {
         // TODO: handle out of range error
+    
+        debug!("Decoding {:?} type data entry at offset: {}", node_type, entry_offset);
         let key_len : u32 = bincode::decode_from_slice(
             &page_buffer[entry_offset..entry_offset+4],
             bincode::config::standard()).unwrap().0;
-
+        debug!("Entry key length: {}", key_len);
         match node_type {
             NodeType::Internal => {
                 let page_id : u32 = bincode::decode_from_slice(
@@ -42,6 +47,7 @@ impl DataEntry {
                     &page_buffer[entry_offset+4..entry_offset+8],
                     bincode::config::standard()).unwrap().0;
 
+                // debug!("Value length: {}", value_len);
                 let value_start = entry_offset+8+(key_len as usize);
                 let record_key = &page_buffer[entry_offset+8..value_start];
                 let record_value = &page_buffer[value_start..value_start+(value_len as usize)];
