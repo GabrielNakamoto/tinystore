@@ -28,11 +28,14 @@ impl DataEntry {
     pub fn decode(page_buffer : &Vec<u8>, entry_offset: usize, node_type : &NodeType) -> std::io::Result<Self> {
         // TODO: handle out of range error
     
-        debug!("Decoding {:?} type data entry at offset: {}", node_type, entry_offset);
         let key_len : u32 = bincode::decode_from_slice(
             &page_buffer[entry_offset..entry_offset+4],
             bincode::config::standard()).unwrap().0;
-        debug!("Entry key length: {}", key_len);
+
+        if key_len != 10 {
+            debug!("Decoding {:?} type data entry at offset: {}", node_type, entry_offset);
+            debug!("Entry key length: {}", key_len);
+        }
         match node_type {
             NodeType::Internal => {
                 let page_id : u32 = bincode::decode_from_slice(

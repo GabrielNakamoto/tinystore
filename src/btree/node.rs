@@ -308,6 +308,7 @@ impl Node {
 
             self.update_left_block(&blocklist, index, new_offset)
         } else {
+            debug!("Creating first free block");
             self.header.first_free_block_offset = new_offset as PagePtr;
             0
         } as u16;
@@ -364,28 +365,26 @@ impl Node {
         self.encode_header();
 
         self.offsets_array = Self::get_offsets_array(&self.header, self.page_id, &self.page_buffer).unwrap();
-        // for i in 0..self.header.items_stored {
-        //     debug!("Offset {}: {}", i, self.offsets_array[i as usize]);
-        // }
 
         InsertResult::Success
     }
 
     // Optimize this, to batch together removals / updating offsets array
     pub fn remove_data_entry(&mut self, entry_id : usize) -> std::io::Result<()> {
-        info!("Removing entry #{} at page id {}", entry_id, self.page_id);
         let entry_offset = self.offsets_array[entry_id] as PagePtr;
-        let entry = self.decode_data_entry(entry_id)?; // Error here?
+        let entry = self.decode_data_entry(entry_id)?;
+        info!("Removing entry #{} at page id {}, offset {}", entry_id, self.page_id, entry_offset);
+        // debug!("Entry being removed: {:#?}", entry);
 
         self.insert_free_block(entry_offset, entry.size() as u16);
     
-        let slice_start = Self::offsets_ptr(self.page_id) as usize;
-        let slice_end = self.header.free_space_start as usize;
-        let mut offsets_slice = &mut self.page_buffer[slice_start..slice_end];
-
-        let start = entry_id*4;
-        // let end = self.header.free_space_start as usize;
-        offsets_slice.copy_within(start.., start-4);
+        if (entry_id as u32) < self.header.items_stored - 1{
+            let slice_start = Self::offsets_ptr(self.page_id) as usize;
+            let slice_end = self.header.free_space_start as usize;
+            let mut offsets_slice = &mut self.page_buffer[slice_start..slice_end];
+            let start = (entry_id+1)*4;
+            offsets_slice.copy_within(start.., start-4);
+        }
 
         self.header.free_space_start -= 4;
         self.header.items_stored -= 1;

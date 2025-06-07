@@ -49,7 +49,7 @@ pub fn get_record(mut key : Vec<u8>, pager : &mut Pager) -> std::io::Result<Vec<
     for i in 0..node.header.items_stored {
         match node.decode_data_entry(i as usize)? {
             DataEntry::Leaf(entry_key, value) => {
-                // debug!("{:?} / {:?}", entry_key, key);
+                debug!("{:?} / {:?}", entry_key, key);
                 if entry_key == key {
                     return Ok(value);
                 }
@@ -155,11 +155,12 @@ pub fn split_node(node : &mut Node, pager : &mut Pager) -> std::io::Result<()> {
     };
 
     node.header.parent = parent_node.page_id as i32;
+    parent_node.header.rightmost_child = right_node.page_id;
     right_node.header.parent = parent_node.page_id as i32;
     node.encode_header();
     right_node.encode_header();
 
-    pager.save_page(&right_node.page_buffer, None);
+    pager.save_page(&right_node.page_buffer, Some(right_node.page_id));
 
     parent_node.insert_data_entry(&split_entry);
     pager.save_page(&parent_node.page_buffer, None);
