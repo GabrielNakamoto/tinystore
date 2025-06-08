@@ -66,11 +66,18 @@ impl NodeHeader {
     }
 }
 
+
+// Every time I insert a key to an internal node
+// I need to swap the ptr of the new entry and
+// the src child??
+
 pub struct Node {
     pub page_id : u32,
     pub page_buffer : Vec<u8>,
     pub header: NodeHeader,
-    pub offsets_array : Vec<u32>
+    pub offsets_array : Vec<u32>,
+    // pub seperator_keys: Option<Vec<Vec<u8>>>,
+    // pub child_ptrs: Option<Vec<u32>>
 }
 
 pub enum InsertResult {
@@ -171,7 +178,6 @@ impl Node {
         })
     }
 
-    // TODO: error handling
     pub fn encode_header(&mut self)  {
         let header_start = if self.page_id == 0 { DB_HEADER_SIZE } else { 0 } as usize;
 
@@ -214,13 +220,14 @@ impl Node {
 
     pub fn decode_data_entry(&self, entry_id : usize) -> std::io::Result<DataEntry> {
         // debug!("Decode entry id: {}, 
-        // debug!("Decoding entry: {} out of {}", entry_id, self.offsets_array.len());
+        debug!("Decoding entry: {} out of {}", entry_id, self.offsets_array.len());
         let entry_offset = self.offsets_array.get(entry_id).copied().unwrap() as usize;
 
         DataEntry::decode(&self.page_buffer, entry_offset, &self.header.node_type)
     }
 
-    fn encode_entry_offset(&mut self, new_entry : &DataEntry, entry_offset : u32) {
+    // Returns new entry id
+    fn encode_entry_offset(&mut self, new_entry : &DataEntry, entry_offset : u32) -> u32 {
         // Find spot where entry belongs
         let mut right_index = self.header.items_stored + 1;
         for i in 0..self.header.items_stored {
@@ -236,9 +243,9 @@ impl Node {
         debug!("New entry offset: {}", entry_offset);
         let mut entry_slice = if right_index == self.header.items_stored + 1 {
             debug!("Appending offset to end of array");
+
             // Add to end
             let start = self.header.free_space_start as usize;
-            
             &mut self.page_buffer[start..start+4]
         } else {
             debug!("Adding offset into middle of array");
@@ -254,8 +261,13 @@ impl Node {
         };
 
         bincode::encode_into_slice(&entry_offset, entry_slice, bincode::config::standard());
-
         self.header.free_space_start += 4;
+
+        if right_index == self.header.items_stored + 1 {
+            self.header.items_stored
+        } else {
+            right_index
+        }
     }
 
     fn find_block_offset(&self, vec : &Vec<FreeBlock>, index: usize) -> PagePtr {
@@ -334,15 +346,39 @@ impl Node {
         debug!("Found available free block at linked list index: {}", idx);
 
         let block = iter_vec[idx];
-
         let offset = self.find_block_offset(&iter_vec, idx);
         self.remove_free_block(&iter_vec, idx, block.next_ptr);
 
         Some(offset)
     }
-    
+
+    fn swap_child_ptrs(&mut self, new_entry: &mut DataEntry, entry_id: u32) {
+        // Entry id is where the target entry will be because the
+        // new entry hasn't been encoded yet
+        if entry_id >= self.header.items_stored {
+            return;
+        }
+
+        info!("Swapping child ptrs {} and {} out of {}", entry_id, entry_id + 1, self.header.items_stored);
+        let mut next_entry = self.decode_data_entry(entry_id as usize).unwrap();
+        let right_ptr = new_entry.child_ptr().unwrap();
+        *new_entry = DataEntry::Internal(new_entry.key().clone(), next_entry.child_ptr().unwrap());
+        next_entry = DataEntry::Internal(next_entry.key().clone(), right_ptr);
+
+        let next_offset = self.offsets_array[entry_id as usize] as usize;
+        next_entry.encode(&mut self.page_buffer[next_offset..next_offset+(next_entry.size() as usize)]);
+    }
+
+    // In an internal node if the new entry has the largest key, rightmost child needs to be
+    // updated, just swap the ptr with the rightmost child??
     pub fn insert_data_entry(&mut self, new_entry : &DataEntry) -> InsertResult {
-        info!("Inserting entry #{} at page id {}", self.header.items_stored + 1, self.page_id);
+        debug!("Inserting entry #{} at page id {}", self.header.items_stored + 1, self.page_id);
+
+        if self.header.free_space_end - self.header.free_space_start < 4 {
+            debug!("Node id: {} overflowed", self.page_id);
+            return InsertResult::NeedsSplit;
+        }
+
         let is_room : bool = self.header.free_space_end - self.header.free_space_start >= (new_entry.size() as u32 + 4);
 
         let offset = self.find_and_remove_free_block(new_entry.size() as u32)
@@ -358,8 +394,15 @@ impl Node {
             return InsertResult::NeedsSplit;
         }
 
-        new_entry.encode(&mut self.page_buffer[offset..offset+(new_entry.size() as usize)]);
-        self.encode_entry_offset(&new_entry, offset as u32);
+        let entry_id = self.encode_entry_offset(&new_entry, offset as u32);
+
+        if self.header.node_type == NodeType::Internal {
+            let mut entry = new_entry.clone();
+            self.swap_child_ptrs(&mut entry, entry_id);
+            entry.encode(&mut self.page_buffer[offset..offset+(entry.size() as usize)]);
+        } else {
+            new_entry.encode(&mut self.page_buffer[offset..offset+(new_entry.size() as usize)]);
+        }
 
         self.header.items_stored += 1;
         self.encode_header();
@@ -373,8 +416,7 @@ impl Node {
     pub fn remove_data_entry(&mut self, entry_id : usize) -> std::io::Result<()> {
         let entry_offset = self.offsets_array[entry_id] as PagePtr;
         let entry = self.decode_data_entry(entry_id)?;
-        info!("Removing entry #{} at page id {}, offset {}", entry_id, self.page_id, entry_offset);
-        // debug!("Entry being removed: {:#?}", entry);
+        debug!("Removing entry #{} at page id {}, offset {}", entry_id, self.page_id, entry_offset);
 
         self.insert_free_block(entry_offset, entry.size() as u16);
     
@@ -393,11 +435,6 @@ impl Node {
         self.offsets_array =
             Self::get_offsets_array(&self.header, self.page_id, &self.page_buffer).unwrap();
 
-        if let Some(iter) = FreeBlockIter::new(self) {
-            let blocklist: Vec<FreeBlock> = iter.collect();
-            
-            info!("Updated free list: {:#?}", blocklist);
-        }
         Ok(())
     }
 }

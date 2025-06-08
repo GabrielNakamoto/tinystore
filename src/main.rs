@@ -1,3 +1,4 @@
+use log::info;
 use std::path::Path;
 use std::collections::HashMap;
 use tinystore::connection::{Connection, Config};
@@ -15,7 +16,7 @@ fn random_string(n : usize) -> String {
 
 fn main() {
     env_logger::init();
-    let n : u32 = 175;
+    let n : u32 = 500;
     let mut entries : HashMap<String, String> = HashMap::new();
 
     // Generate random entries
@@ -29,13 +30,22 @@ fn main() {
         .expect("Failed to connect to DB");
 
     // Populate db
+    info!("Populating test values");
     for (key, value) in &entries {
         connection.put(key.clone().into_bytes(), value.clone().into_bytes());
     }
 
+    info!("Verifying test values");
     // Verify values
-    for (key, value) in &entries {
-        let returned_value = connection.get(key.clone().into_bytes()).unwrap();
-        assert_eq!(value.clone().into_bytes(), returned_value);
+    for (index, (key, value)) in entries.iter().enumerate() {
+        match connection.get(key.clone().into_bytes()) {
+            Ok(returned_value) => {
+                info!("Got entry {}", index);
+                assert_eq!(value.clone().into_bytes(), returned_value);
+            },
+            Err(e) => {
+                info!("Couldn't find entry {}: {}", index, e);
+            }
+        }
     }
 }

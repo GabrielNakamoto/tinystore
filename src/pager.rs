@@ -56,7 +56,7 @@ impl Pager {
                 assert_eq!(pos % PAGE_SIZE, 0);
 
                 let new_page_id : usize = pos / PAGE_SIZE;
-                debug!("Creating new page at id: {}", new_page_id);
+                info!("Creating new page at id: {}", new_page_id);
 
                 self.file_handle.write(&page_buffer[..]);
                 self.file_handle.rewind();

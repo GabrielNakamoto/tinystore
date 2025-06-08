@@ -69,7 +69,6 @@ pub fn search(key : &Vec<u8>, pager : &mut Pager) -> std::io::Result<Node> {
     let mut cur_page_id = root_page_id;
 
     debug!("Starting b+tree search at root id: {}", root_page_id);
-
     while true {
         debug!("Searching node at page id: {}", cur_page_id);
         let node = Node::deserialize(cur_page_id, pager)?;
@@ -131,10 +130,7 @@ pub fn split_node(node : &mut Node, pager : &mut Pager) -> std::io::Result<()> {
     let to_move = if node.header.node_type == NodeType::Leaf { split_point } else { split_point - 1 };
 
     // Create right node and move pointers and records
-    let split_key = (node.header.items_stored as usize) - to_move;
-    let mut split_entry = DataEntry::Internal(
-        node.decode_data_entry(split_key)?.key().to_vec(),
-        node.page_id);
+    let split_key = node.decode_data_entry((node.header.items_stored as usize) - to_move)?.key().to_vec();
 
     let mut right_node = Node::new(node.header.node_type.clone(), pager);
     right_node.encode_header();
@@ -151,19 +147,27 @@ pub fn split_node(node : &mut Node, pager : &mut Pager) -> std::io::Result<()> {
     let mut parent_node = if node.header.parent != -1 {
         Node::deserialize(node.header.parent as u32, pager)?
     } else {
+        info!("Creating new parent node for page id: {}", node.page_id);
         Node::new(NodeType::Internal, pager)
     };
 
+    let child_ptr = if node.header.parent == -1 || node.page_id == parent_node.header.rightmost_child {
+        parent_node.header.rightmost_child = right_node.page_id;
+        node.page_id
+    } else {
+        right_node.page_id
+    };
+
+    let split_entry = DataEntry::Internal(split_key, child_ptr);
+    parent_node.insert_data_entry(&split_entry);
+
     node.header.parent = parent_node.page_id as i32;
-    parent_node.header.rightmost_child = right_node.page_id;
     right_node.header.parent = parent_node.page_id as i32;
     node.encode_header();
     right_node.encode_header();
 
     pager.save_page(&right_node.page_buffer, Some(right_node.page_id));
-
-    parent_node.insert_data_entry(&split_entry);
-    pager.save_page(&parent_node.page_buffer, None);
+    pager.save_page(&parent_node.page_buffer, Some(parent_node.page_id));
 
     let mut db_header = get_db_header(pager)?;
     if db_header.root_node as u32 == node.page_id {
@@ -178,10 +182,27 @@ pub fn split_node(node : &mut Node, pager : &mut Pager) -> std::io::Result<()> {
 
     pager.save_page(&node.page_buffer, Some(node.page_id));
 
-    info!("Updated db header: {:#?}", get_db_header(pager)?);
     info!("Split left node: {:#?}", node.header);
     info!("Split right node: {:#?}", right_node.header);
 
+    for i in 0..parent_node.header.items_stored {
+        let entry = parent_node.decode_data_entry(i as usize).unwrap();
+        if let DataEntry::Internal(key, child) = entry {
+            info!("Parent node entry {}: ({:?}, {})", i, key, child);
+        }
+    }
+    info!("Parent rightmost child: {}", parent_node.header.rightmost_child);
+
+    // for i in 0..node.header.items_stored {
+    //     let entry = node.decode_data_entry(i as usize).unwrap();
+
+    //     info!("[{}] {:?}", node.page_id, entry.key());
+    // }
+    // for i in 0..right_node.header.items_stored {
+    //     let entry = right_node.decode_data_entry(i as usize).unwrap();
+
+    //     info!("[{}] {:?}", right_node.page_id, entry.key());
+    // }
 
     Ok(())
 }
