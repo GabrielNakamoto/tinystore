@@ -16,7 +16,7 @@ fn random_string(n : usize) -> String {
 
 fn main() {
     env_logger::init();
-    let n : u32 = 500;
+    let n : u32 = 10000;
     let mut entries : HashMap<String, String> = HashMap::new();
 
     // Generate random entries
@@ -37,15 +37,17 @@ fn main() {
 
     info!("Verifying test values");
     // Verify values
+    let mut successful = 0;
     for (index, (key, value)) in entries.iter().enumerate() {
         match connection.get(key.clone().into_bytes()) {
             Ok(returned_value) => {
-                info!("Got entry {}", index);
+                successful += 1;
                 assert_eq!(value.clone().into_bytes(), returned_value);
             },
             Err(e) => {
-                info!("Couldn't find entry {}: {}", index, e);
+                // info!("Error getting value: {}", e);
             }
         }
     }
+    info!("{} / {} entries recovered", successful, n);
 }

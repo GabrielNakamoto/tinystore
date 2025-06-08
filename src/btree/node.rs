@@ -359,7 +359,7 @@ impl Node {
             return;
         }
 
-        info!("Swapping child ptrs {} and {} out of {}", entry_id, entry_id + 1, self.header.items_stored);
+        // info!("Swapping child ptrs {} and {} out of {}", entry_id, entry_id + 1, self.header.items_stored);
         let mut next_entry = self.decode_data_entry(entry_id as usize).unwrap();
         let right_ptr = new_entry.child_ptr().unwrap();
         *new_entry = DataEntry::Internal(new_entry.key().clone(), next_entry.child_ptr().unwrap());

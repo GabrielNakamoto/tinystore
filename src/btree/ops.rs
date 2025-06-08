@@ -43,9 +43,6 @@ fn get_db_header(pager : &mut Pager) -> std::io::Result<DBHeader> {
 pub fn get_record(mut key : Vec<u8>, pager : &mut Pager) -> std::io::Result<Vec<u8>> {
     let mut node = search(&key, pager)?;
 
-    // TODO: ensure mutabiliy is correct,
-    // for example since we arent updating the file in
-    // this function it should be all immutable slices of the page
     for i in 0..node.header.items_stored {
         match node.decode_data_entry(i as usize)? {
             DataEntry::Leaf(entry_key, value) => {
@@ -124,7 +121,7 @@ pub fn insert_record(mut key : Vec<u8>, mut value : Vec<u8>, pager : &mut Pager)
 }
 
 pub fn split_node(node : &mut Node, pager : &mut Pager) -> std::io::Result<()> {
-    info!("Splitting node at page id: {}", node.page_id);
+    // info!("Splitting node at page id: {}", node.page_id);
 
     let split_point = ((node.header.items_stored + 1) / 2) as usize;
     let to_move = if node.header.node_type == NodeType::Leaf { split_point } else { split_point - 1 };
@@ -182,16 +179,16 @@ pub fn split_node(node : &mut Node, pager : &mut Pager) -> std::io::Result<()> {
 
     pager.save_page(&node.page_buffer, Some(node.page_id));
 
-    info!("Split left node: {:#?}", node.header);
-    info!("Split right node: {:#?}", right_node.header);
+    // info!("Split left node: {:#?}", node.header);
+    // info!("Split right node: {:#?}", right_node.header);
 
-    for i in 0..parent_node.header.items_stored {
-        let entry = parent_node.decode_data_entry(i as usize).unwrap();
-        if let DataEntry::Internal(key, child) = entry {
-            info!("Parent node entry {}: ({:?}, {})", i, key, child);
-        }
-    }
-    info!("Parent rightmost child: {}", parent_node.header.rightmost_child);
+    // for i in 0..parent_node.header.items_stored {
+    //     let entry = parent_node.decode_data_entry(i as usize).unwrap();
+    //     if let DataEntry::Internal(key, child) = entry {
+    //         info!("Parent node entry {}: ({:?}, {})", i, key, child);
+    //     }
+    // }
+    // info!("Parent rightmost child: {}", parent_node.header.rightmost_child);
 
     // for i in 0..node.header.items_stored {
     //     let entry = node.decode_data_entry(i as usize).unwrap();
