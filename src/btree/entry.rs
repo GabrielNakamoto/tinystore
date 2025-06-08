@@ -3,11 +3,32 @@ use super::{
     node::NodeType,
     error::NodeError
 };
+use std::cmp::Ordering;
 
 #[derive(Debug, Clone)]
 pub enum DataEntry {
     Internal(Vec<u8>, u32), // Key, Child ptr (page_id)
     Leaf(Vec<u8>, Vec<u8>), // Key, Value
+}
+
+impl PartialEq for DataEntry {
+    fn eq(&self, other: &Self) -> bool {
+        *self.key() == *other.key()
+    }
+}
+
+impl Eq for DataEntry {}
+
+impl PartialOrd for DataEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.key().cmp(other.key()))
+    }
+}
+
+impl Ord for DataEntry {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.key().cmp(other.key())
+    }
 }
 
 impl DataEntry {
@@ -39,6 +60,8 @@ impl DataEntry {
             &page_buffer[entry_offset..entry_offset+4],
             bincode::config::standard()).unwrap().0;
 
+        assert_eq!(key_len, 10, "Invalid entry length decoded");
+
         match node_type {
             NodeType::Internal => {
                 let page_id : u32 = bincode::decode_from_slice(
@@ -52,6 +75,7 @@ impl DataEntry {
                 let value_len : u32 = bincode::decode_from_slice(
                     &page_buffer[entry_offset+4..entry_offset+8],
                     bincode::config::standard()).unwrap().0;
+                assert_eq!(value_len, 5, "Invalid value length decoded");
 
                 // debug!("Value length: {}", value_len);
                 let value_start = entry_offset+8+(key_len as usize);

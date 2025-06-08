@@ -1,3 +1,9 @@
+// HANDLIGN INTERNAL NODES
+// Make sure to move rightmost pointer over??
+//
+//
+// What happens to child when parent overflows?
+
 use prev_iter::PrevPeekable;
 use log::{info, warn, debug};
 use super::{
@@ -231,9 +237,10 @@ impl Node {
         // Find spot where entry belongs
         let mut right_index = self.header.items_stored + 1;
         for i in 0..self.header.items_stored {
+            // info!("de: {} / {}", i, self.header.items_stored);
             let entry = self.decode_data_entry(i as usize).unwrap();
 
-            if entry.key() > new_entry.key() {
+            if entry > *new_entry {
                 right_index = i;
                 break;
             }
@@ -242,13 +249,13 @@ impl Node {
         debug!("Right entry id: {}", right_index);
         debug!("New entry offset: {}", entry_offset);
         let mut entry_slice = if right_index == self.header.items_stored + 1 {
-            debug!("Appending offset to end of array");
+            // info!("Appending offset to end of array");
 
             // Add to end
             let start = self.header.free_space_start as usize;
             &mut self.page_buffer[start..start+4]
         } else {
-            debug!("Adding offset into middle of array");
+            // info!("Adding offset into middle of array");
 
             // Shift everything to right over
             let to_shift = self.header.items_stored - right_index;
@@ -343,10 +350,11 @@ impl Node {
         let idx = iter_vec.iter()
             .position(|block| block.total_size as u32 >= min_capacity)?;
 
-        debug!("Found available free block at linked list index: {}", idx);
 
+        // info!("Blocklist: {:#?}", iter_vec);
         let block = iter_vec[idx];
         let offset = self.find_block_offset(&iter_vec, idx);
+        // info!("Found available free block at linked list index: {}, offset : {}", idx, offset);
         self.remove_free_block(&iter_vec, idx, block.next_ptr);
 
         Some(offset)
@@ -372,7 +380,7 @@ impl Node {
     // In an internal node if the new entry has the largest key, rightmost child needs to be
     // updated, just swap the ptr with the rightmost child??
     pub fn insert_data_entry(&mut self, new_entry : &DataEntry) -> InsertResult {
-        debug!("Inserting entry #{} at page id {}", self.header.items_stored + 1, self.page_id);
+        // info!("Inserting entry #{} at page id {}", self.header.items_stored + 1, self.page_id);
 
         if self.header.free_space_end - self.header.free_space_start < 4 {
             debug!("Node id: {} overflowed", self.page_id);
@@ -384,32 +392,45 @@ impl Node {
         // This is some baddd stuff, TODO: check for overflow when subtracting
         let offset = self.find_and_remove_free_block(new_entry.size() as u32)
             .unwrap_or_else(|| {
-                debug!("Appending entry to free space");
+                // info!("Appending entry to free space");
                 self.header.free_space_end -= new_entry.size() as u32;
 
                 self.header.free_space_end as PagePtr
             }) as usize;
 
         if (! is_room) && offset as u32 == self.header.free_space_end {
-            debug!("Node id: {} overflowed", self.page_id);
+            // info!("Node id: {} overflowed", self.page_id);
             self.header.free_space_end += new_entry.size();
             return InsertResult::NeedsSplit;
         }
 
         let entry_id = self.encode_entry_offset(&new_entry, offset as u32);
 
-        if self.header.node_type == NodeType::Internal {
+        if self.header.node_type == NodeType::Internal && entry_id != self.header.items_stored {
             let mut entry = new_entry.clone();
             self.swap_child_ptrs(&mut entry, entry_id);
             entry.encode(&mut self.page_buffer[offset..offset+(entry.size() as usize)]);
         } else {
             new_entry.encode(&mut self.page_buffer[offset..offset+(new_entry.size() as usize)]);
+
+            // This fails for some reason
+            // info!("Verifying: {:#?}", new_entry);
+            // info!("Ntype: {:?}", self.header.node_type);
+            let verify = DataEntry::decode(&self.page_buffer, offset, &self.header.node_type).unwrap();
         }
 
         self.header.items_stored += 1;
         self.encode_header();
 
         self.offsets_array = Self::get_offsets_array(&self.header, self.page_id, &self.page_buffer).unwrap();
+        // info!("Validating newest entry");
+        // self.decode_data_entry(self.header.items_stored as usize - 1);
+
+        // assert_eq!(offset as u32, self.offsets_array[self.header.items_stored as usize - 1]);
+        // for i in 0..self.header.items_stored {
+        //     info!("i: {}", i);
+        //     self.decode_data_entry(i as usize).unwrap();
+        // }
 
         InsertResult::Success
     }
@@ -418,7 +439,7 @@ impl Node {
     pub fn remove_data_entry(&mut self, entry_id : usize) -> std::io::Result<()> {
         let entry_offset = self.offsets_array[entry_id] as PagePtr;
         let entry = self.decode_data_entry(entry_id)?;
-        debug!("Removing entry #{} at page id {}, offset {}", entry_id, self.page_id, entry_offset);
+        // info!("Removing entry #{} at page id {}, offset {}", entry_id, self.page_id, entry_offset);
 
         self.insert_free_block(entry_offset, entry.size() as u16);
     
