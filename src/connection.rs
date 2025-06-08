@@ -49,7 +49,7 @@ impl Connection {
     }
 
     pub fn put(&mut self, key : Vec<u8>, value : Vec<u8>) -> std::io::Result<()> {
-        btree::ops::insert_record(key, value, &mut self.pager)?;
+        btree::ops::insert_leaf_data(key, value, &mut self.pager)?;
         Ok(())
     }
     pub fn get(&mut self, key : Vec<u8>) -> std::io::Result<Vec<u8>> {

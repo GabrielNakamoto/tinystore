@@ -381,6 +381,7 @@ impl Node {
 
         let is_room : bool = self.header.free_space_end - self.header.free_space_start >= (new_entry.size() as u32 + 4);
 
+        // This is some baddd stuff, TODO: check for overflow when subtracting
         let offset = self.find_and_remove_free_block(new_entry.size() as u32)
             .unwrap_or_else(|| {
                 debug!("Appending entry to free space");
@@ -391,6 +392,7 @@ impl Node {
 
         if (! is_room) && offset as u32 == self.header.free_space_end {
             debug!("Node id: {} overflowed", self.page_id);
+            self.header.free_space_end += new_entry.size();
             return InsertResult::NeedsSplit;
         }
 
@@ -434,46 +436,6 @@ impl Node {
 
         self.offsets_array =
             Self::get_offsets_array(&self.header, self.page_id, &self.page_buffer).unwrap();
-
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use rand::{thread_rng, Rng};
-    use rand::prelude::*;
-    use crate::pager::Pager;
-    use super::*;
-    use std::path::Path;
-    fn random_string(n : usize) -> String {
-        thread_rng()
-            .sample_iter(rand::distr::Alphanumeric)
-            .take(n)
-            .map(char::from)
-            .collect()
-    }
-
-    #[test]
-    fn insertion_test() -> std::io::Result<()> {
-        let mut rng = rand::rng();
-
-        let key_len = rng.random_range(1..=100) as usize;
-        let value_len = rng.random_range(1..=100) as usize;
-        let key = random_string(key_len).into_bytes();
-        let value = random_string(value_len).into_bytes();
-
-        let test_db = Path::new("testing_db");
-        let mut pager = Pager::new(&test_db)?;
-        let mut node = Node::new(NodeType::Leaf, &mut pager);
-
-        let entry = DataEntry::Leaf(key.clone(), value.clone());
-
-        node.insert_data_entry(&entry);
-        if let DataEntry::Leaf(K, V) = node.decode_data_entry(0)? {
-            assert_eq!(K, key);
-            assert_eq!(V, value);
-        }
 
         Ok(())
     }

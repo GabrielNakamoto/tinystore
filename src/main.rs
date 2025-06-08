@@ -20,8 +20,13 @@ fn main() {
     let mut entries : HashMap<String, String> = HashMap::new();
 
     // Generate random entries
+    let mut rng = rand::rng();
     for _ in 0..n {
-        entries.insert(random_string(10), random_string(5));
+        // let key_len = rng.random_range(1..500) as usize;
+        // let value_len = rng.random_range(1..500) as usize;
+        let key_len: usize = 10;
+        let value_len: usize = 5;
+        entries.insert(random_string(key_len), random_string(value_len));
     }
 
     // Initialize connection
@@ -39,6 +44,9 @@ fn main() {
     // Verify values
     let mut successful = 0;
     for (index, (key, value)) in entries.iter().enumerate() {
+        // let returned_value = connection.get(key.clone().into_bytes()).unwrap();
+        // assert_eq!(value.clone().into_bytes(), returned_value);
+        // successful += 1;
         match connection.get(key.clone().into_bytes()) {
             Ok(returned_value) => {
                 successful += 1;
