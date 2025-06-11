@@ -16,4 +16,4 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Run
-      run: RUST_BACKTRACE=1 RUST_LOG=info cargo run
+      run: RUST_BACKTRACE=1 RUST_LOG=info cargo test
