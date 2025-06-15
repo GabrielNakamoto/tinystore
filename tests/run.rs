@@ -9,7 +9,7 @@ use std::path::Path;
 #[test]
 fn fill_and_query() {
     env_logger::init();
-    let n = 500;
+    let n = 20000;
     let mut items: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
 
     for i in 0..n {

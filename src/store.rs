@@ -174,21 +174,21 @@ impl PageData {
         let mut right = PageData::new();
         let n_items = self.get_n_items();
         let sp = ((n_items + 1) / 2) - 1;
-        info!("Split point: {sp}");
-        info!("Before split");
-        self.print_items();
+        // info!("Split point: {sp}");
+        // info!("Before split");
+        // self.print_items();
         // Move items over
         for i in (sp..n_items).rev() {
             // Ends at sp?
-            info!("i: {i}, sp: {sp}, n: {n_items}");
+            // info!("i: {i}, sp: {sp}, n: {n_items}");
             // Decreasing key value
             let (key, value) = self.remove_item(i);
             right.insert_item(0, &key, &value);
         }
 
-        info!("After split");
-        self.print_items();
-        right.print_items();
+        // info!("After split");
+        // self.print_items();
+        // right.print_items();
 
         (sp - 1, right)
     }
@@ -301,11 +301,11 @@ impl BTree {
         }
     }
 
-    fn create_root(&mut self, io: &mut PageCache, overflow: (ItemPtr, PageData)) -> Result<()> {
-        let (sp, right) = overflow;
+    fn create_root(&mut self, io: &mut PageCache, overflow: (Key, PageData)) -> Result<()> {
+        let (sk, right) = overflow;
         let pid = self.root;
         let page = io.get_page(pid)?;
-        let (sk, _) = page.get_item(sp);
+        // let (sk, _) = page.get_item(sp);
         let right_id = io.new_page()?;
         let root_id = io.new_page()?;
         info!("Creating root at page id {root_id}");
@@ -320,8 +320,6 @@ impl BTree {
         self.root = root_id;
         self.height += 1;
 
-        root.print_items();
-
         Ok(())
     }
 
@@ -330,10 +328,8 @@ impl BTree {
         let page = io.get_page(pid)?;
 
         // TODO: binary search within pages
-        info!("Searching page: {pid}");
         for i in 0..page.get_n_items() {
             let (k, v) = page.get_item(i);
-            info!("\t[{i}] {:?} == {:?}?", *key, k);
             if k == *key {
                 return Ok(v);
             }
@@ -355,8 +351,6 @@ impl BTree {
             let page = io.get_page(pid)?;
             let ip = page.lin_find_place(key);
             pid = page.get_child(ip.min(page.get_n_items() - 1));
-
-            info!("Following ip: {ip} for leaf key: {key:?}");
             self.find_leaf(io, pid, key, height - 1)
         }
     }
@@ -384,30 +378,16 @@ impl BTree {
         &mut self,
         io: &mut PageCache,
         ip: ItemPtr,
-        sp: ItemPtr,
+        sk: Key,
         parent: &mut PageData,
         child: &mut PageData,
-        right: PageData,
-        pid: PageId,
-        cid: PageId,
+        mut right: PageData,
         key: &Key,
         value: &Value,
+        pid: PageId,
+        cid: PageId,
         height: u16,
-    ) -> Result<Option<(ItemPtr, PageData)>> {
-        info!("Splitting node: {cid}");
-        // Handle reinsertion
-
-        let (mut sk, sptr) = if height > 1 {
-            child.remove_item(sp)
-        } else {
-            child.get_item(sp)
-        };
-
-        if height > 1 {
-            // If child is internal node, removed pointer
-            child.insert_item(sp, &vec![0u8; 0], &sptr);
-        }
-
+    ) -> Result<Option<(Key, PageData)>> {
         let rid = io.new_page()?;
 
         io.commit_page(cid, &child);
@@ -416,23 +396,20 @@ impl BTree {
         // Swap keys with child pointers
         //
         //  ------      --------------------------
-        //  \....\ .... | left child ptr | Key 1 | ....
+        //  |....| .... | left child ptr | Key 1 | ....
         //  ------      --------------------------
         //
         //  ------      ----------------------------------------------------
-        //  \....\ .... | left child ptr | Key 2 | Right child ptr | Key 1 | ....
+        //  |....| .... | left child ptr | Key 2 | Right child ptr | Key 1 | ....
         //  ------      ----------------------------------------------------
         //
 
         let (k1, _) = parent.remove_item(ip);
         parent.insert_item(ip, &sk, &cid.to_be_bytes().to_vec());
 
-        let overflow = self.try_insert(io, parent, pid, ip + 1, &k1, &rid.to_be_bytes().to_vec());
+        let overflow = self.try_insert(io, parent, pid, ip + 1, &k1, &rid.to_be_bytes().to_vec(), height+1);
 
         io.commit_page(pid, &parent)?;
-
-        info!("Verifying updated parent #{pid} keys and ptrs");
-        parent.print_items();
 
         Ok(overflow)
     }
@@ -444,13 +421,13 @@ impl BTree {
         key: &Key,
         value: &Value,
         height: u16,
-    ) -> Result<Option<(ItemPtr, PageData)>> {
+    ) -> Result<Option<(Key, PageData)>> {
         let mut page = io.get_page(pid)?;
         let n = page.get_n_items();
         let ip = page.lin_find_place(key);
 
         if height == 0 {
-            let overflow = self.try_insert(io, &mut page, pid, ip, key, value);
+            let overflow = self.try_insert(io, &mut page, pid, ip, key, value, height);
             io.commit_page(pid, &page)?;
             return Ok(overflow);
         }
@@ -460,21 +437,23 @@ impl BTree {
 
         let overflow = if height == 1 {
             let cip = child_page.lin_find_place(key);
-            self.try_insert(io, &mut child_page, child, cip, &key, &value)
+            self.try_insert(io, &mut child_page, child, cip, key, value, height)
         } else {
             self.insert(io, child, key, value, height - 1)?
         };
 
         page = io.get_page(pid)?;
 
-        if let Some((sp, right)) = overflow {
+        if let Some((sk, right)) = overflow {
             self.balance(
                 io,
                 ip.min(n - 1),
-                sp,
+                sk,
                 &mut page,
                 &mut child_page,
                 right,
+                key,
+                value,
                 pid,
                 child,
                 height,
@@ -484,7 +463,6 @@ impl BTree {
         }
     }
 
-    // What should I return?
     pub fn try_insert(
         &mut self,
         io: &mut PageCache,
@@ -493,24 +471,34 @@ impl BTree {
         ip: ItemPtr,
         key: &Key,
         value: &Value,
-    ) -> Option<(ItemPtr, PageData)> {
-        // Return split item
+        height: u16
+    ) -> Option<(Key, PageData)> { // Return split key and right node page data
         let okay = page.insert_item(ip, key, value);
         io.commit_page(pid, &page);
         if !okay {
-            let (sp, mut right) = page.split();
-            // HAVE TO GET SPLIT KEY FIRST
-
-            // TODO: handle split on new entry
-            if ip > sp {
-                let nip = right.lin_find_place(key);
-                right.insert_item(nip, key, value);
+            let (mut sp, mut right) = page.split();
+            let (sk, sv) = if ip == sp+1 {
+                sp += 1;
+                (key.clone(), value.clone())
             } else {
-                let nip = page.lin_find_place(key);
-                page.insert_item(nip, key, value);
+                page.remove_item(sp)
+            };
+
+            if height > 1 {
+                page.insert_item(sp, &vec![0u8; 0], &sv);
+            } else {
+                page.insert_item(sp, &sk, &sv);
             }
 
-            return Some((sp, right));
+            if *key > sk {
+                let ip = right.lin_find_place(key);
+                right.insert_item(ip, &key, &value);
+            } else if *key < sk {
+                let ip = page.lin_find_place(key);
+                page.insert_item(ip, &key, &value);
+            }
+
+            return Some((sk, right));
         }
         None
     }
