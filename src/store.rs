@@ -130,7 +130,7 @@ impl PageData {
         let vl = value.len();
         let il = 4 + kl + vl;
 
-        if PAGE_SIZE - PAGE_HEADER_SIZE >= (n_items * 2) + size + il + 2 {
+        if PAGE_SIZE - PAGE_HEADER_SIZE > (n_items * 2) + size + il + 2 {
             // Shift greater items towards header,
             // offsets will decrease
             for i in (ip..n_items).rev() {
@@ -174,21 +174,11 @@ impl PageData {
         let mut right = PageData::new();
         let n_items = self.get_n_items();
         let sp = ((n_items + 1) / 2) - 1;
-        // info!("Split point: {sp}");
-        // info!("Before split");
-        // self.print_items();
-        // Move items over
+
         for i in (sp..n_items).rev() {
-            // Ends at sp?
-            // info!("i: {i}, sp: {sp}, n: {n_items}");
-            // Decreasing key value
             let (key, value) = self.remove_item(i);
             right.insert_item(0, &key, &value);
         }
-
-        // info!("After split");
-        // self.print_items();
-        // right.print_items();
 
         (sp - 1, right)
     }
@@ -304,8 +294,8 @@ impl BTree {
     fn create_root(&mut self, io: &mut PageCache, overflow: (Key, PageData)) -> Result<()> {
         let (sk, right) = overflow;
         let pid = self.root;
+
         let page = io.get_page(pid)?;
-        // let (sk, _) = page.get_item(sp);
         let right_id = io.new_page()?;
         let root_id = io.new_page()?;
         info!("Creating root at page id {root_id}");
@@ -356,8 +346,6 @@ impl BTree {
     }
 
     pub fn btree_insert(&mut self, io: &mut PageCache, key: &Key, value: &Value) -> Result<()> {
-        // Handle root overflow??
-
         if self.root == 0 {
             let mut root = PageData::new();
             root.insert_item(0, key, value);
@@ -370,10 +358,10 @@ impl BTree {
         if let Some(root_overflow) = self.insert(io, self.root, key, value, self.height - 1)? {
             self.create_root(io, root_overflow)?;
         }
+
         Ok(())
     }
 
-    // TODO: handle ip = n
     fn balance(
         &mut self,
         io: &mut PageCache,
@@ -389,25 +377,27 @@ impl BTree {
         height: u16,
     ) -> Result<Option<(Key, PageData)>> {
         let rid = io.new_page()?;
-
-        io.commit_page(cid, &child);
         io.commit_page(rid, &right);
 
         // Swap keys with child pointers
         //
-        //  ------      --------------------------
         //  |....| .... | left child ptr | Key 1 | ....
-        //  ------      --------------------------
-        //
-        //  ------      ----------------------------------------------------
         //  |....| .... | left child ptr | Key 2 | Right child ptr | Key 1 | ....
-        //  ------      ----------------------------------------------------
         //
-
         let (k1, _) = parent.remove_item(ip);
+
+        // Can this overflow?
         parent.insert_item(ip, &sk, &cid.to_be_bytes().to_vec());
 
-        let overflow = self.try_insert(io, parent, pid, ip + 1, &k1, &rid.to_be_bytes().to_vec(), height+1);
+        let overflow = self.try_insert(
+            io,
+            parent,
+            pid,
+            ip + 1,
+            &k1,
+            &rid.to_be_bytes().to_vec(),
+            height,
+        );
 
         io.commit_page(pid, &parent)?;
 
@@ -437,13 +427,17 @@ impl BTree {
 
         let overflow = if height == 1 {
             let cip = child_page.lin_find_place(key);
-            self.try_insert(io, &mut child_page, child, cip, key, value, height)
+            let over = self.try_insert(io, &mut child_page, child, cip, key, value, height - 1);
+
+            // Only save the newest version
+            io.commit_page(child, &child_page);
+
+            over
         } else {
             self.insert(io, child, key, value, height - 1)?
         };
 
         page = io.get_page(pid)?;
-
         if let Some((sk, right)) = overflow {
             self.balance(
                 io,
@@ -471,20 +465,21 @@ impl BTree {
         ip: ItemPtr,
         key: &Key,
         value: &Value,
-        height: u16
-    ) -> Option<(Key, PageData)> { // Return split key and right node page data
+        height: u16,
+    ) -> Option<(Key, PageData)> {
+        // Return split key and right node page data
         let okay = page.insert_item(ip, key, value);
         io.commit_page(pid, &page);
         if !okay {
             let (mut sp, mut right) = page.split();
-            let (sk, sv) = if ip == sp+1 {
+            let (sk, sv) = if ip == sp + 1 {
                 sp += 1;
                 (key.clone(), value.clone())
             } else {
                 page.remove_item(sp)
             };
 
-            if height > 1 {
+            if height >= 1 {
                 page.insert_item(sp, &vec![0u8; 0], &sv);
             } else {
                 page.insert_item(sp, &sk, &sv);
