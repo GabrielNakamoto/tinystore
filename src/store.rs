@@ -29,7 +29,7 @@ const METADATA_SIZE: usize = 18;
 const MAGIC: u32 = 0x54494E59;
 const CACHE_CAPACITY: u16 = 10;
 
-#[derive(Encode, Decode)]
+#[derive(Encode, Decode, Debug)]
 struct MetaData {
     magic: u32,
     size: u64,
@@ -508,6 +508,7 @@ impl BTree {
 pub struct PageCache {
     file: File,
     capacity: u16, // max # of pages
+    size: u64, // Size in bytes of total db file, loaded on startup
     pages: Vec<Vec<u8>>,
 }
 
@@ -541,6 +542,7 @@ impl PageCache {
 
     fn commit_page(&mut self, pid: PageId, data: &PageData) -> Result<()> {
         let offs = pid as u64 * PAGE_SIZE as u64;
+        self.size = self.size.max(offs + PAGE_SIZE as u64);
         // self.size = self.size.max((pid*2) as u64 * PAGE_SIZE as u64);
         self.file.write_all_at(data.as_slice(), offs)?;
 
@@ -563,9 +565,11 @@ impl Connection {
         // Try intiializing database
         let (file, meta) = if let Ok(file) = File::options().read(true).write(true).open(db_path) {
             let mut buffer = vec![0u8; METADATA_SIZE];
+            file.read_exact_at(buffer.as_mut_slice(), 0)?;
             let meta: MetaData =
                 bincode::decode_from_slice(buffer.as_mut_slice(), BINCODE_CONFIG)?.0;
 
+            info!("Loaded db metadata: {:#?}", meta);
             (file, meta)
         } else {
             let file = File::options()
@@ -591,20 +595,43 @@ impl Connection {
 
         Ok(Connection {
             access: BTree::initialize(&meta),
-            metadata: meta,
             pcache: PageCache {
                 file,
                 capacity: CACHE_CAPACITY,
+                size: meta.size,
                 pages: Vec::new(),
             },
+            metadata: meta,
         })
     }
 
+    fn commit_metadata(&mut self) -> Result<()> {
+        self.metadata = MetaData {
+            height: self.access.height,
+            root: self.access.root,
+            size: self.pcache.size,
+            ..self.metadata
+        };
+
+        let mut buffer = vec![0u8; METADATA_SIZE];
+        bincode::encode_into_slice(&self.metadata, &mut buffer[..], BINCODE_CONFIG)?;
+
+        self.pcache.file.write_all_at(buffer.as_slice(), 0)?;
+
+        Ok(())
+    }
+
     pub fn put(&mut self, key: &Key, value: &Value) -> Result<()> {
-        self.access.btree_insert(&mut self.pcache, key, value)
+        let result = self.access.btree_insert(&mut self.pcache, key, value);
+
+        self.commit_metadata()?;
+
+        result
     }
 
     pub fn get(&mut self, key: &Key) -> Result<Value> {
-        self.access.btree_get(&mut self.pcache, key)
+        let result = self.access.btree_get(&mut self.pcache, key);
+            
+        result
     }
 }
