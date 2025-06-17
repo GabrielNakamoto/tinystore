@@ -8,6 +8,15 @@
 Simple, distributed key value storage engine.
 Current target architecture consists of a page cache, b+tree and application connection object.  
 
+## Goals
+- [ ] Stop randomly losing records!
+- [ ] Write Ahead Logging
+- [ ] LRU Page Caching
+- [ ] HTTP Interface
+- [ ] Multi-Threading
+- [ ] ACID Compliance?
+- [ ] Distributed Network?
+
 ```mermaid
 flowchart TD
     User -- API --> Connection
