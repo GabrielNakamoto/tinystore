@@ -14,7 +14,7 @@ Current target architecture consists of a page cache, b+tree and application con
 | # of entries | Time (ms) | Insertion kb/s | Retrieval kb/s |
 | ------------ | --------- | -------------- | -------------- |
 | 10,0000      | 1,255     | 177            | 455            |
-| 100,00       | 16,721    | 142            | 292            |
+| 100,000      | 16,721    | 142            | 292            |
 | 500,000      | 83,342    | 139            | 308            |
 
 
