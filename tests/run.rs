@@ -6,6 +6,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 use tinystore::store::Connection;
 
+
 fn generate_entries(
     n_entries: usize,
     key_len: usize,
@@ -80,45 +81,90 @@ Overall:\t\t\t{}s\t{}ms\n",
     info!("{}", benchmark);
 }
 
+fn insert_items(connection: &mut Connection, items: &HashMap<Vec<u8>, Vec<u8>>) -> Duration {
+    let now = Instant::now();
+    for (key, value) in items {
+        connection.put(key, value).unwrap();
+    }
+
+    now.elapsed()
+}
+
+fn get_items(connection: &mut Connection, items: &HashMap<Vec<u8>, Vec<u8>>) -> (usize, Duration) {
+    let now = Instant::now();
+    let mut successful: usize = 0;
+    for (i, (key, value)) in items.iter().enumerate() {
+        if let Ok(rvalue) = connection.get(&key) {
+            assert_eq!(rvalue, *value);
+            successful += 1;
+        }
+    }
+
+    (successful, now.elapsed())
+}
+
 // TODO: make multiple tests
+// TODO: understand iterators? Sequential insert / get
 #[test]
 fn fill_and_query() {
-    env_logger::init();
-    const n: usize = 120000;
+    env_logger::try_init();
+    const n: usize = 10000;
     const kl: usize = 10;
     const vl: usize = 6;
 
     let items = generate_entries(n, kl, vl);
 
-    let path = Path::new("mydb");
+    let path = Path::new("test1");
     let mut connection = Connection::open(&path).unwrap();
 
-    let now = Instant::now();
-    for (key, value) in &items {
-        connection.put(&key, &value).unwrap();
-    }
-    let insertion_elapsed = now.elapsed();
+    let insertion_elapsed = insert_items(&mut connection, &items);
+    let (successful, query_elapsed) = get_items(&mut connection, &items);
 
-    let mut successful = 0;
-    for (i, (key, value)) in items.iter().enumerate() {
-        match connection.get(&key) {
-            Ok(rvalue) => {
-                assert_eq!(rvalue, *value);
-                successful += 1;
-            }
-            Err(_) => {
-                // info!("Couldn't find {i}th test key");
-            }
-        }
-    }
-    let total_elapsed = now.elapsed();
+    std::fs::remove_file("test1");
 
     print_benchmark(
         insertion_elapsed,
-        total_elapsed - insertion_elapsed,
+        query_elapsed,
         n,
         kl,
         vl,
         successful,
     );
+}
+
+#[test]
+fn multiple_open_and_fill() {
+    env_logger::try_init();
+    const times: usize = 8;
+    const n: usize = 50000;
+    const kl: usize = 10;
+    const vl: usize = 6;
+
+    let mut total_lost = 0;
+    let mut total_time: Duration = Duration::new(0, 0);
+
+    for i in 0..times {
+        let items = generate_entries(n, kl, vl);
+        let path = Path::new("test2");
+        let mut connection = Connection::open(&path).unwrap();
+        let insertion_elapsed = insert_items(&mut connection, &items);
+        let (successful, query_elapsed) = get_items(&mut connection, &items);
+
+        total_lost += n - successful;
+        total_time += insertion_elapsed + query_elapsed;
+
+        print_benchmark(
+            insertion_elapsed,
+            query_elapsed,
+            n,
+            kl,
+            vl,
+            successful,
+        );
+    }
+
+    std::fs::remove_file("test2");
+
+    info!("Total lost: {}", total_lost);
+    info!("Took:\t{}s\t{}ms", total_time.as_secs(), total_time.as_millis());
 }
