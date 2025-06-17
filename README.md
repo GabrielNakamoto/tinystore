@@ -11,11 +11,11 @@ Current target architecture consists of a page cache, b+tree and application con
 ### Rough Benchmarks (I know, it's slow)
 - Randomly generated 10 byte keys, 6 byte values
 
-| # of entries | Time (ms) | Insertion kb/s | Retrieval kb/s |
+| # of entries | Time (ms) | Insertion (kb/s) | Retrieval (kb/s) |
 | ------------ | --------- | -------------- | -------------- |
-| 10,0000      | 1,255     | 177            | 455            |
-| 100,000      | 16,721    | 142            | 292            |
-| 500,000      | 83,342    | 139            | 308            |
+| 10,0000      | 1255      | 177            | 455            |
+| 100,000      | 16721     | 142            | 292            |
+| 500,000      | 83342     | 139            | 308            |
 
 
 ## Goals
